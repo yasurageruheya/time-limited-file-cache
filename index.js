@@ -76,7 +76,7 @@ class TimeLimitedFileCache
 	/**
 	 *
 	 * @param {string} fileName
-	 * @return {Promise<Buffer>}
+	 * @return {Promise<ArrayBuffer|undefined>}
 	 */
 	read(fileName)
 	{
@@ -87,8 +87,8 @@ class TimeLimitedFileCache
 	/**
 	 *
 	 * @param {string} fileName
-	 * @param {Buffer|ArrayBuffer|TypedArray} buffer
-	 * @return {Promise<*>|*} ファイルへの書き込みが成功した時は resolve され、ファイルが使用中で書き込みが後回しにされた場合、またはファイルの内容と同一の buffer が渡され更新が必要ない場合は reject されます。
+	 * @param {Buffer|ArrayBuffer|TypedArray|string} buffer
+	 * @return {Promise<undefined>} ファイルへの書き込みが成功した時は resolve され、ファイルが使用中で書き込みが後回しにされた場合、またはファイルの内容と同一の buffer が渡され更新が必要ない場合は reject されます。
 	 */
 	write(fileName, buffer)
 	{
@@ -105,7 +105,7 @@ class TimeLimitManager
 	/** @type {string} */
 	filePath;
 
-	/** @type {Promise.<Buffer>} */
+	/** @type {Promise.<ArrayBuffer|undefined>} */
 	#readPromise;
 
 	/** @type {ArrayBuffer} */
@@ -120,10 +120,10 @@ class TimeLimitManager
 	/** @type {boolean} */
 	#isFileAccessing = false;
 
-	/** @type {function(buffer:ArrayBuffer)} */
+	/** @type {function(buffer:ArrayBuffer|undefined):void} */
 	#readQueue = null;
 
-	/** @type {{buffer:Buffer, resolves:function[]}|null} */
+	/** @type {{arrayBuffer:ArrayBuffer, resolves:function[]}|null} */
 	#writeQueue = null;
 
 	/**
@@ -139,7 +139,7 @@ class TimeLimitManager
 
 	/**
 	 *
-	 * @return {Promise<ArrayBuffer>|Promise<undefined>}
+	 * @return {Promise<ArrayBuffer|undefined>}
 	 */
 	read()
 	{
@@ -212,7 +212,7 @@ class TimeLimitManager
 							if(logger)
 								logger.log(this, logger.WRITE_START_FROM_QUEUE_AFTER_READ);
 
-							this.#write(this.#writeQueue.buffer, this.#writeQueue.resolves);
+							this.#write(new Uint8Array(this.#writeQueue.arrayBuffer), this.#writeQueue.resolves);
 							this.#writeQueue = null;
 						}
 						this.#readPromise = null;
@@ -238,15 +238,17 @@ class TimeLimitManager
 
 	/**
 	 *
-	 * @param {Buffer} buffer
+	 * @param {Buffer|ArrayBuffer|TypedArray|string} buffer
 	 * @return {Promise<*>|*}
 	 */
 	write(buffer)
 	{
 		return new Promise((resolve)=>
 		{
-			buffer = Buffer.from(buffer);
-			const arrayBuffer = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
+			// if(!(buffer instanceof ArrayBuffer)) buffer = buffer.buffer;
+			// const arrayBuffer = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
+			buffer = buffer.buffer ? buffer.buffer : buffer;
+			const arrayBuffer = buffer instanceof ArrayBuffer ? buffer : Buffer.from(buffer.toString());
 			this.#updateTimeLimit();
 			if(!this.#isFileAccessing)
 			{
@@ -290,7 +292,7 @@ class TimeLimitManager
 					logger.log(this, logger.FILE_ACCESS_ERROR_ON_WRITE, decoder.decode(arrayBuffer));
 
 				const resolves = this.#writeQueue ? [resolve, ...this.#writeQueue.resolves] : [resolve];
-				this.#writeQueue = {buffer:Buffer.from(arrayBuffer), resolves};
+				this.#writeQueue = {arrayBuffer, resolves};
 			}
 
 			this.#data = arrayBuffer;
@@ -309,6 +311,11 @@ class TimeLimitManager
 
 	}
 
+	/**
+	 *
+	 * @param {TypedArray} typedArray
+	 * @param {function[]} resolves
+	 */
 	#write(typedArray, resolves)
 	{
 
@@ -329,13 +336,13 @@ class TimeLimitManager
 				if(logger)
 					logger.log(this, logger.WRITE_START_FROM_QUEUE_AFTER_WRITE);
 
-				this.#write(this.#writeQueue.buffer, this.#writeQueue.resolves);
+				this.#write(new Uint8Array(this.#writeQueue.arrayBuffer), this.#writeQueue.resolves);
 				this.#writeQueue = null;
 			}
 
 			if(this.#readQueue)
 			{
-				this.#readQueue(typedArray);
+				this.#readQueue(typedArray.buffer);
 				this.#readQueue = null;
 
 				if(logger)
