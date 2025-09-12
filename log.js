@@ -3,34 +3,32 @@ let getStack;
 const customPrepareStackTrace = (error, structuredStackTrace)=>
 {
 	const lastCallSite = structuredStackTrace[1];
-	const firstCallSite = structuredStackTrace[structuredStackTrace.length - 1];
-	return  firstCallSite.getFileName() + " : " + firstCallSite.getLineNumber()
-	+ " ･･･> " + lastCallSite.getFileName() + " : " + lastCallSite.getLineNumber();
-}
-
-getStack = ()=>
-{
-	const original = Error.prepareStackTrace;
-	Error.prepareStackTrace = customPrepareStackTrace;
-	const obj = {};
-	Error.captureStackTrace(obj, getStack);
-	const message = obj.stack;
-	Error.prepareStackTrace = original;
-	return message;
+	return lastCallSite.getFileName() + " : " + lastCallSite.getLineNumber();
 }
 
 class Log
 {
+	static getStack = ()=>
+	{
+		const original = Error.prepareStackTrace;
+		Error.prepareStackTrace = customPrepareStackTrace;
+		const obj = {};
+		Error.captureStackTrace(obj, Log.getStack);
+		const message = obj.stack;
+		Error.prepareStackTrace = original;
+		return message;
+	}
+
 	/**
 	 *
-	 * @param {TimeLimitManager} manager
+	 * @param {TimeLimitManager|{filePath:string}} manager
 	 * @param {*} args
 	 */
 	static log(manager, ...args)
 	{
 		const message = manager.filePath + " : " + args.join(" ");
 		manager.parent.log.push(message);
-		const stack = getStack();
+		const stack = Log.getStack();
 		manager.parent.stacks.push(stack);
 		console.log(stack + " " + message);
 	}
@@ -39,13 +37,45 @@ class Log
 
 	static READ_FROM_MEMORY_CACHE = "メモリキャッシュに値があったのでそれを Promise に渡します";
 
+	static READ_BUFFER_ERROR = "ファイル読み取りでエラーが発生しました。";
+
 	static READ_START_FROM_FILE_SYSTEM = "メモリキャッシュに値が無かったため、ファイルシステムから読み取りを開始します";
 
-	static READ_COMPLETE_FROM_FILE_SYSTEM = "ファイルシステムからの読み取り処理が完了されました";
+	static READ_COMPLETE_FROM_FILE_SYSTEM = "ファイルシステムからの読み取り処理が完了しました";
 
-	static READ_QUEUE = "#この処理には来ないはずです# ファイルシステムに書き込み中のため、ファイルシステムからの読み取りを中断し、書き込み完了後に Promise 解決に値を渡します"
+	static READ_COMPLETE_FROM_FILE_SYSTEM_BUT_MEMORY_CACHE_UPDATED = "ファイルからの読み取りが完了しましたが、読み取り完了までの間にメモリキャッシュが更新されていたため、メモリキャッシュの値を返します";
 
-	static FILE_ACCESS_ERROR_ON_WRITE = "ファイルが読み取り中または書き込み中のため、データの書き込みはキューに入りました";
+	static READ_QUEUE = "読み取ろうとしたファイルがストリームによる書き込み中のため、ファイルシステムからの読み取りを待機し、書き込み完了後に読み取りを開始します";
+
+	static READ_START_DUE_TO_WRITE_STREAM_COMPLETE = "ストリームによる書き込みが完了したため、ファイルシステムからの読み取りを開始します";
+
+	static READ_SKIPPED_DUE_TO_MEMORY_CACHE_UPDATE_AFTER_STREAM_WRITE = "ストリームによる書き込み完了後に、メモリキャッシュが更新されたため、ファイルシステムからの読み取りをスキップし、メモリキャッシュの値を返します";
+
+	static READ_QUEUE_DUE_TO_GLOBAL_READ_LIMIT = "ファイルディスクリプタの全体の上限に達したため、ファイル読み取りはキューに入りました";
+
+	static READ_QUEUE_DUE_TO_FILE_READ_LIMIT = "1ファイル当たりのファイルディスクリプタの上限に達したため、ファイル読み取りはキューに入りました";
+
+	static READ_STREAM_QUEUE_DUE_TO_FILE_READ_LIMIT = "1ファイル当たりのファイルディスクリプタの上限に達したため、ファイル読み取りはキューに入りました";
+
+	static READ_STREAM_READY = "読み取りストリームの準備が出来ました";
+
+	static READ_STREAM_CHUNK_READ = "ストリームがデータを読み取りました";
+
+	static READ_STREAM_COMPLETE = "読み取りストリームが全てのデータの読み取りを完了しました";
+
+	static READ_STREAM_CLOSED = "読み取りストリームが閉じられました";
+
+	static READ_STREAM_QUEUED_DUE_TO_WRITING = "ファイルが書き込み中のため、ストリームによる読み取りはキューに入りました";
+
+	static READ_STREAM_ERROR = "読み取りストリームでエラーが発生しました。";
+
+	static WRITE_QUEUED_DUE_TO_READING = "ファイルが読み取り中のため、データの書き込みはキューに入りました";
+
+	static WRITE_QUEUED_DUE_TO_WRITING = "ファイルが書き込み中のため、データの書き込みはキューに入りました";
+
+	static WRITE_STREAM_QUEUED_DUE_TO_FILE_READING = "ファイルが読み取り中のため、書き込みストリームは遅れて取得されます";
+
+	static WRITE_STREAM_QUEUED_DUE_TO_FILE_WRITING = "ファイルが書き込み中のため、書き込みストリームは遅れて取得されます";
 
 	static UPDATED_MEMORY_CACHE = "メモリキャッシュの値が更新されました";
 
@@ -53,11 +83,43 @@ class Log
 
 	static WRITE_START = "ファイルへの書き込みを開始します";
 
+	static WRITE_BUFFER_ERROR = "ファイル書き込みでエラーが発生しました。";
+
 	static WRITE_START_FROM_QUEUE_AFTER_WRITE = "ファイルへの書き込みが終わったので、新しいデータをファイルへ書き込み開始します";
 
 	static WRITE_START_FROM_QUEUE_AFTER_READ = "ファイルからの読み取りが終わったので、新しいデータをファイルへ書き込み開始します";
 
+	static WRITE_STREAM_READY = "書き込みストリームの準備が出来ました";
+
+	static WRITE_STREAM_ERROR = "書き込みストリームでエラーが発生しました。";
+
+	static WRITE_STREAM_CHUNK_WRITE_BEGIN = "ストリームでデータ（チャンク）を書き込みます";
+
+	static WRITE_STREAM_CHUNK_WRITE_ERROR = "ストリームでデータ（チャンク）を書き込み中にエラーが発生しました。";
+
+	static WRITE_STREAM_CHUNK_ACCEPTED = "ストリームでデータ（チャンク）が全て内部バッファに転送されました";
+
+	static WRITE_STREAM_BUFFER_FULL = "書き込みストリームの内部バッファが満杯になりました";
+
+	static WRITE_STREAM_DRAINED = "書き込みストリームの内部バッファが空になり、次のデータ（チャンク）を受け入れる準備が整いました";
+
+	static WRITE_STREAM_FINISH_REQUESTED = "書き込みストリームを完了します";
+
+	static WRITE_STREAM_FINISH_ERROR = "書き込みストリームを完了しようとした時にエラーが発生しました";
+
+	static WRITE_STREAM_ALL_DATA_COMPLETED = "ストリームで全てのデータの書き込みが完了しました";
+
+	static WRITE_STREAM_STARTED_FROM_QUEUE_AFTER_FILE_WRITE = "ファイルへの書き込みが終わったので、書き込みストリームを取得できます";
+
+	static WRITE_STREAM_STARTED_FROM_QUEUE_AFTER_FILE_READ = "ファイルからの読み取りが終わったので、書き込みストリームを取得できます";
+
+	static WRITE_STREAM_CLOSED = "書き込みストリームが閉じられました";
+
+	static WRITE_STREAM_CLOSE_ERROR = "書き込みストリームを閉じようとした時にエラーが発生しました";
+
 	static WRITE_COMPLETE_TO_FILE_SYSTEM = "ファイルへの書き込みが完了しました";
+
+	static WRITE_SKIPPED_DUE_TO_NEW_WRITE = "書き込み待機中に新しいデータの書き込み要求が発生したため、古い書き込み要求はスキップされました";
 
 	static WRITE_SKIPPED_DATA_UNCHANGED = "書き込みしようとしたデータがファイルの内容と同一のため、ファイルシステムへの書き込みはされませんでした";
 
@@ -67,9 +129,19 @@ class Log
 
 	static REMOVE_START_CACHE_FILE ="最後のアクセスから fileTTL に指定された時間が経過したため、キャッシュファイルの削除を開始します"
 
+	static SKIP_REMOVE_FILE_DUE_TO_ACTIVE_READ_OR_WRITE = "最後のアクセスから fileTTL に指定された時間が経過しましたが、ストリームによる読み取り／書き込みが行われているため、キャッシュファイルの削除をスキップします";
+
 	static REMOVE_CACHE_FILE = "キャッシュファイルを削除しました";
 
+	static REMOVE_CACHE_FILE_FAILED = "キャッシュファイルの削除に失敗しました";
+
 	static NON_EXIST_CACHE = "メモリキャッシュもキャッシュファイルも存在しませんでした";
+
+	static GLOBAL_WAIT_ITEM_MUST_BE_FUNCTION = "GLOBAL_WAIT_ITEM_MUST_BE_FUNCTION";
+	
+	static PROMISE_NOT_FOUND_IN_FINALIZE = "#readings: promise not found in finalize";
+
+	static CURRENT_GLOBAL_READINGS_UNDERFLOW = "currentGlobalReadings underflow";
 }
 
 module.exports = Log;
