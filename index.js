@@ -31,7 +31,10 @@ class TimeLimitedFileCache
 	 */
 
 
-
+	/**
+	 *
+	 * @type {WriteResultType}
+	 */
 	static WRITE_RESULT = Object.freeze({
 		SKIPPED_SAME_AS_MEMORY_CACHE: Symbol(),
 		CANCELED_BY_NEWER_REQUEST: Symbol(),
@@ -261,7 +264,7 @@ class TimeLimitedFileCache
 	 * @param {string} fileName
 	 * @param {number} [maxStreamBufferSize=16384]
 	 * @param {number} [writeStreamErrorTimeout=TimeLimitedFileCache.writeStreamErrorTimeout]
-	 * @return {Promise<WriteStreamAgent|TimeLimitedFileCache.WRITE_RESULT.CANCELED_BY_NEWER_REQUEST>}
+	 * @return {Promise<WriteStreamAgent|TimeLimitedFileCache.WRITE_RESULT.CANCELED_BY_NEWER_REQUEST|symbol>}
 	 * @see {TimeLimitedFileCache.writeStreamErrorTimeout}
 	 */
 	writeAsStream(fileName, maxStreamBufferSize = 16384, writeStreamErrorTimeout = TimeLimitedFileCache.writeStreamErrorTimeout)
@@ -397,7 +400,7 @@ class TimeLimitManager
 				resolve(this.#data);
 
 				if(logger)
-					logger.log(this, logger.READ_FROM_MEMORY_CACHE, outputDataForLog(this.#data));
+					logger.log(this, logger.READ_FROM_MEMORY_CACHE, logger.outputDataForLog(this.#data));
 			});
 		}
 		else if(this.#readPromise)
@@ -494,7 +497,6 @@ class TimeLimitManager
 					{
 						if(error)
 						{
-							const errorDetail = readError(error);
 							if(error.code === "ENOENT")
 							{
 								if(logger)
@@ -505,10 +507,7 @@ class TimeLimitManager
 							else
 							{
 								if(logger)
-								{
-									logger.log(this, logger.READ_BUFFER_ERROR, errorDetail, error);
-									console.error(errorDetail);
-								}
+									logger.log(this, logger.READ_BUFFER_ERROR, error);
 
 								parentReject(error);
 							}
@@ -519,7 +518,7 @@ class TimeLimitManager
 							parentResolve(this.#data);
 							if(logger)
 							{
-								logger.log(this, logger.READ_COMPLETE_FROM_FILE_SYSTEM, outputDataForLog(data));
+								logger.log(this, logger.READ_COMPLETE_FROM_FILE_SYSTEM, logger.outputDataForLog(data));
 								logger.log(this, logger.UPDATED_MEMORY_CACHE_AFTER_READ_FROM_FILE);
 							}
 						}
@@ -528,15 +527,15 @@ class TimeLimitManager
 					{
 						parentResolve(this.#data);
 						if(logger)
-							logger.log(this, logger.READ_FROM_MEMORY_CACHE, outputDataForLog(this.#data));
+							logger.log(this, logger.READ_FROM_MEMORY_CACHE, logger.outputDataForLog(this.#data));
 					}
 					else
 					{
 						parentResolve(this.#data);
 						if(logger)
 						{
-							logger.log(this, logger.READ_COMPLETE_FROM_FILE_SYSTEM, outputDataForLog(data));
-							logger.log(this, logger.READ_COMPLETE_FROM_FILE_SYSTEM_BUT_MEMORY_CACHE_UPDATED, outputDataForLog(this.#data));
+							logger.log(this, logger.READ_COMPLETE_FROM_FILE_SYSTEM, logger.outputDataForLog(data));
+							logger.log(this, logger.READ_COMPLETE_FROM_FILE_SYSTEM_BUT_MEMORY_CACHE_UPDATED, logger.outputDataForLog(this.#data));
 						}
 					}
 
@@ -557,7 +556,7 @@ class TimeLimitManager
 	{
 		return new Promise((resolve, reject)=>
 		{
-			if(!this.#writing)
+			/*if(!this.#writing)
 			{
 				this.#createReadStreamAgent(maxStreamBufferSize, resolve, reject);
 			}
@@ -570,8 +569,28 @@ class TimeLimitManager
 				{
 					this.#createReadStreamAgent(maxStreamBufferSize, resolve, reject);
 				})
-			}
+			}*/
+			this.#tryCreateReadStreamAgent(maxStreamBufferSize, resolve, reject);
 		});
+	}
+
+	#tryCreateReadStreamAgent(maxStreamBufferSize, resolve, reject)
+	{
+		if(!this.#writing)
+		{
+			this.#createReadStreamAgent(maxStreamBufferSize, resolve, reject);
+		}
+		else
+		{
+			if(logger)
+				logger.log(this, logger.READ_STREAM_QUEUED_DUE_TO_WRITING);
+
+			this.#writing.then(()=>
+			{
+				this.#tryCreateReadStreamAgent(maxStreamBufferSize, resolve, reject);
+				// this.#createReadStreamAgent(maxStreamBufferSize, resolve, reject);
+			})
+		}
 	}
 
 	#createReadStreamAgent(maxStreamBufferSize, resolve, reject)
@@ -589,46 +608,44 @@ class TimeLimitManager
 
 	#createReadStreamAgentFunc(options)
 	{
-		acquireGlobalReadSlot(this).then(()=>
+		const fileReading = new Promise((resolve, reject) =>
 		{
-			const maxStreamBufferSize = options.maxStreamBufferSize;
-			const parentResolve = options.resolve;
-
-			if(logger)
-				logger.log(this, logger.READ_STREAM_READY);
-
-			/** @type {fs.ReadStream} */
-			const readStream = fs.createReadStream(this.filePath, {highWaterMark: maxStreamBufferSize});
-
-			let _resolve, _reject;
-			const promise = new Promise((resolve, reject)=>
+			acquireGlobalReadSlot(this).then(()=>
 			{
-				_resolve = resolve;
-				_reject = reject;
+				const maxStreamBufferSize = options.maxStreamBufferSize;
+				const streamCreatedResolve = options.resolve;
+
+				if(logger)
+					logger.log(this, logger.READ_STREAM_READY);
+
+				/** @type {fs.ReadStream} */
+				const readStream = fs.createReadStream(this.filePath, {highWaterMark: maxStreamBufferSize});
+
 				readStream.once("close", ()=>
 				{
 					this.#updateTimeLimit();
 				});
-			});
-			parentResolve(new ReadStreamAgent(readStream, this, promise, _resolve, _reject));
+				// streamCreatedResolve(new ReadStreamAgent(readStream, this, promise, _resolve, _reject));
+				streamCreatedResolve(new ReadStreamAgent(readStream, this, fileReading, resolve, reject));
 
-			this.#readings.push(promise);
-
-			const finalize = ()=>
-			{
-				const index = this.#readings.indexOf(promise);
-				if(index >= 0) this.#readings.splice(index, 1);
-				else if(logger)
-					logger.log(this, logger.PROMISE_NOT_FOUND_IN_FINALIZE);
-
-				if(this.#readWait.length)
+				const finalize = ()=>
 				{
-					const wait = this.#readWait.shift();
-					wait.readFunc(wait.options);
+					const index = this.#readings.indexOf(fileReading);
+					if(index >= 0) this.#readings.splice(index, 1);
+					else if(logger)
+						logger.log(this, logger.PROMISE_NOT_FOUND_IN_FINALIZE);
+
+					if(this.#readWait.length)
+					{
+						const wait = this.#readWait.shift();
+						wait.readFunc(wait.options);
+					}
 				}
-			}
-			promise.then(finalize, finalize);
-		});
+				fileReading.then(finalize, finalize);
+			});
+		})
+
+		this.#readings.push(fileReading);
 	}
 
 	/**
@@ -669,14 +686,14 @@ class TimeLimitManager
 				else if(this.#readings.length)
 				{
 					if(logger)
-						logger.log(this, logger.WRITE_QUEUED_DUE_TO_READING, outputDataForLog(buf));
+						logger.log(this, logger.WRITE_QUEUED_DUE_TO_READING, logger.outputDataForLog(buf));
 
 					Promise.allSettled(this.#readings).then(()=>
 					{
 						if(this.#pendingWrite === resolve)
 						{
 							if(logger)
-								logger.log(this, logger.WRITE_START_FROM_QUEUE_AFTER_READ, outputDataForLog(buf));
+								logger.log(this, logger.WRITE_START_FROM_QUEUE_AFTER_READ, logger.outputDataForLog(buf));
 
 							this.#writeAsBuffer(buf, resolve, reject);
 						}
@@ -685,7 +702,7 @@ class TimeLimitManager
 				else if(this.#writing)
 				{
 					if(logger)
-						logger.log(this, logger.WRITE_QUEUED_DUE_TO_WRITING, outputDataForLog(buf));
+						logger.log(this, logger.WRITE_QUEUED_DUE_TO_WRITING, logger.outputDataForLog(buf));
 
 					this.#writing.then(()=>
 					{
@@ -701,7 +718,7 @@ class TimeLimitManager
 
 				this.#data = buf;
 				if(logger)
-					logger.log(this, logger.UPDATED_MEMORY_CACHE, outputDataForLog(buf));
+					logger.log(this, logger.UPDATED_MEMORY_CACHE, logger.outputDataForLog(buf));
 
 				if(this.#reading)
 				{
@@ -737,12 +754,8 @@ class TimeLimitManager
 
 				if(error)
 				{
-					const errorDetail = writeError(error);
 					if(logger)
-					{
-						logger.log(this, logger.WRITE_BUFFER_ERROR, errorDetail, error);
-						console.error(errorDetail);
-					}
+						logger.log(this, logger.WRITE_BUFFER_ERROR, error);
 
 					parentReject(error);
 				}
@@ -768,7 +781,13 @@ class TimeLimitManager
 	{
 		return new Promise(resolve=>
 		{
-			if(this.#pendingWrite) this.#pendingWrite(TimeLimitedFileCache.WRITE_RESULT.CANCELED_BY_NEWER_REQUEST);
+			if(this.#pendingWrite)
+			{
+				this.#pendingWrite(TimeLimitedFileCache.WRITE_RESULT.CANCELED_BY_NEWER_REQUEST);
+
+				if(logger)
+					logger.log(this, logger.WRITE_STREAM_SKIPPED_DUE_TO_NEW_WRITE);
+			}
 			this.#pendingWrite = resolve;
 
 			if(!this.#readings.length && !this.#writing)
@@ -798,7 +817,23 @@ class TimeLimitManager
 
 				this.#writing.then(()=>
 				{
-					if(this.#pendingWrite === resolve)
+					if(this.#readings.length)
+					{
+						if(logger)
+							logger.log(this, logger.WRITE_STREAM_QUEUED_DUE_TO_FILE_READING);
+
+						Promise.allSettled(this.#readings).then(()=>
+						{
+							if(this.#pendingWrite === resolve)
+							{
+								if(logger)
+									logger.log(this, logger.WRITE_STREAM_STARTED_FROM_QUEUE_AFTER_FILE_READ);
+
+								resolve(this.#createWriteStreamAgent(maxStreamBufferSize, writeStreamErrorTimeout));
+							}
+						});
+					}
+					else if(this.#pendingWrite === resolve)
 					{
 						if(logger)
 							logger.log(this, logger.WRITE_STREAM_STARTED_FROM_QUEUE_AFTER_FILE_WRITE);
@@ -863,12 +898,8 @@ class TimeLimitManager
 				if(!writeStreamAgent.waitForClose) finalize();
 				else finalizeTimer = setTimeout(finalize, writeStreamAgent.writeStreamErrorTimeout);
 
-				const errorDetail = writeError(error);
 				if(logger)
-				{
-					logger.log(this, logger.WRITE_STREAM_ERROR, errorDetail, error);
-					console.error(errorDetail);
-				}
+					logger.log(this, logger.WRITE_STREAM_ERROR, error);
 
 				writeStreamAgent.emit("error", error);
 				try { writeStream.close(); } catch (error) { }
@@ -1017,12 +1048,8 @@ class ReadStreamAgent extends EventEmitter
 			self.emit("error", error);
 			this.#releaseGlobalReadSlotOnce(this.#parent);
 
-			const errorDetail = readError(error);
 			if(logger)
-			{
-				logger.log(this.#parent, logger.READ_STREAM_ERROR, errorDetail, error);
-				console.error(errorDetail);
-			}
+				logger.log(this.#parent, logger.READ_STREAM_ERROR, error);
 
 			reject({error, readStreamAgent:self});
 		}
@@ -1092,14 +1119,8 @@ class WriteStreamAgent extends EventEmitter
 
 			const onError = error =>
 			{
-				//todo: "ERR_STREAM_WRITE_AFTER_END" と "ERR_STREAM_DESTROYED" に関しても考慮に入れる
-				const errorDetail = writeError(error);
-
 				if(logger)
-				{
-					logger.log(this.#parent, logger.WRITE_STREAM_CHUNK_WRITE_ERROR, errorDetail, error);
-					console.error(errorDetail);
-				}
+					logger.log(this.#parent, logger.WRITE_STREAM_CHUNK_WRITE_ERROR, error);
 
 				reject({error, agent:this});
 			}
@@ -1174,26 +1195,16 @@ class WriteStreamAgent extends EventEmitter
 			}
 			const onFinishError = error=>
 			{
-				const errorDetail = writeError(error);
-
 				if(logger)
-				{
-					logger.log(this.#parent, logger.WRITE_STREAM_FINISH_ERROR, errorDetail, error);
-					console.error(errorDetail);
-				}
+					logger.log(this.#parent, logger.WRITE_STREAM_FINISH_ERROR, error);
 
 				this.#writeStream.off("finish", onFinish);
 				reject({error, agent:this});
 			}
 			const onCloseError = error =>
 			{
-				const errorDetail = writeError(error);
-
 				if(logger)
-				{
 					logger.log(this.#parent, logger.WRITE_STREAM_CLOSE_ERROR, error);
-					console.error(errorDetail);
-				}
 
 				this.#writeStream.off("close", onClose);
 				reject({error, agent:this});
@@ -1204,18 +1215,6 @@ class WriteStreamAgent extends EventEmitter
 		});
 
 	}
-}
-
-
-/**
- *
- * @param {Buffer} buffer
- * @return {string}
- */
-const outputDataForLog = (buffer)=>
-{
-	if(buffer.byteLength <= 8) return decoder.decode(buffer);
-	return decoder.decode(buffer.subarray(0, 8)) + "... bytes: " + buffer.byteLength;
 }
 
 /**
@@ -1231,125 +1230,4 @@ const normalizeToBuffer = (input)=>
 	if(typeof input === "string") return Buffer.from(input);
 	throw new Error("TimeLimitedFileCache の writeAsBuffer() 及び writeAsStream() の write() メソッドに渡せる書き込み用データの型は Buffer, ArrayBuffer, TypedArray, string のいずれかのみになります");
 }
-
-const readError = (error) =>
-{
-	if(fsReadError[error.code]) return fsReadError[error.code];
-	else return "不明な読み取りエラーが発生しました";
-}
-
-const fsErrorPhase = {};
-fsErrorPhase.pathSyntax = "1.パス構文エラー。";
-fsErrorPhase.pathResolve = "2.パス解決エラー。";
-fsErrorPhase.deviceAddress = "3a.デバイスアドレスエラー。";
-fsErrorPhase.deviceAvailable = "3b.デバイス有効性エラー。";
-fsErrorPhase.fileHandle = "3c.ファイルハンドルエラー。";
-fsErrorPhase.socket = "3d.ソケット接続エラー。";
-fsErrorPhase.timeout = "3e.タイムアウトエラー。";
-fsErrorPhase.pathStruct = "4.パス構造エラー。";
-fsErrorPhase.attributes = "5.ファイル属性エラー。";
-fsErrorPhase.link = "6.シンボリックリンクエラー。";
-fsErrorPhase.open = "7.ファイルオープンエラー。";
-fsErrorPhase.access = "8.アクセス権エラー。";
-fsErrorPhase.arguments = "9.引数の妥当性エラー。";
-fsErrorPhase.resource = "10.リソース制限エラー。";
-fsErrorPhase.io = "11.I/Oエラー。";
-
-const fsError = {};
-fsError.EXDEV = fsErrorPhase.pathStruct + "fs.rename() によるファイル移動で、別ファイルシステムへ移動しようとした可能性があります";
-fsError.EACCES = "パーミッションの他、ACL(Access Control List)、マウントオプション、Windows であればファイルロックなど様々な要因でアクセス権違反が起きるみたいです";
-fsError.EPERM = "SELinux ポリシー設定、immutable 属性、root 権限が必要など、Windows であれば ACL による制限が親ディレクトリにかけられている場合など様々な要因で操作がブロックされるみたいです";
-
-const fsReadError = {};
-fsReadError.ENAMETOOLONG = fsErrorPhase.pathSyntax + "ファイルパスが長すぎるみたいです";
-fsReadError.EEXIST = fsErrorPhase.pathResolve + "ファイルが既に存在しています"; //読み取り時は発生しないらしい
-fsReadError.ENOENT = fsErrorPhase.pathResolve + "存在しないファイルを読み取ろうとしたか、途中のディレクトリが削除されたかリネームされてしまった可能性があります";
-fsReadError.ENXIO = fsErrorPhase.deviceAddress + "指定されたファイルが置かれていたデバイスとの通信が途中で切断されたか、過去に認識されたデバイス上のファイルを、デバイス未接続の状態で読み取ろうとした可能性があります。デバイスが正常に接続／認識／マウントされているかを確認してみてください。それ以外にもこのエラーが出る要因の可能性は多岐に渡りますので、物理的な故障なども視野に入れて確認する必要があるかもしれません";
-fsReadError.ENODEV = fsErrorPhase.deviceAvailable + "指定されたファイルが置かれているデバイスが有効なデバイスとして認識されていないようです。マウント解除やネットワーク切断の可能性があります。それ以外にもこのエラーが出る要因の可能性は多岐に渡りますので、物理的な故障なども視野に入れて確認する必要があるかもしれません";
-fsReadError.ESTALE = fsErrorPhase.fileHandle + "ネットワーク越しのファイルハンドルが無効になったみたいです"; //todo: 再試行戦略が出来るかもしれない
-fsReadError.ENOTCONN = fsErrorPhase.socket + "ソケット接続が確立されていません"; //fs API 以外でソケット接続のプロトコルでファイルのやり取りをしない限りこのエラーは発生しえないらしい
-fsReadError.ETIMEDOUT = fsErrorPhase.timeout + "ネットワーク越しのファイルにアクセスしようとしましたが、タイムアウトされたみたいです"; //todo: もっと詳しく
-fsReadError.ENOTDIR = fsErrorPhase.pathStruct + "ファイルパスの途中のディレクトリがファイルに変更されたみたいです"; //todo: 本当に合ってる？
-fsReadError.ENOTEMPTY = fsErrorPhase.pathStruct + "削除しようとしたディレクトリの中が空ではありません"; //現状ディレクトリを削除するような実装は無いので発生しえない
-fsReadError.ENOTBLK = fsErrorPhase.attributes + "ブロックデバイスではありませんでした"; //todo: 読み取り時は発生しないらしいけど本当に？
-fsReadError.ELOOP = fsErrorPhase.link + "シンボリックリンクの無限ループが見つかりました"; //todo: もっと詳しく
-fsReadError.EISDIR = fsErrorPhase.open + "ディレクトリをファイルとして読み取ろうとしたみたいです";
-fsReadError.ETXTBSY = fsErrorPhase.open + "実行中の実行ファイルの中身を読み取ろうとしたみたいです"; //todo: もっと詳しく。読み取り時に発生する物じゃないらしい
-fsReadError.EACCES = fsErrorPhase.access + "読み取るためのアクセス権が不足しているみたいです。" + fsError.EACCES;
-fsReadError.EPERM = fsErrorPhase.access + "管理者から許可設定がされていない操作、またはシステムレベルで許可されていない操作としてみなされた読み取り操作みたいです" + fsError.EPERM;
-fsReadError.EROFS = fsErrorPhase.access + "読み取り専用のファイルシステム下のファイルに対して読み取りを行おうとしました"; //読み取り専用でも読み取れるので読み取り時はこのエラーは出ない
-fsReadError.EOVERFLOW = fsErrorPhase.arguments + "32bit OSで4GB越えのファイルを開いたみたいな事が起きたみたいです"; //todo: もっと詳しく
-fsReadError.EINVAL = fsErrorPhase.arguments + "ファイル操作関連のメソッドに無効な引数が渡されました"; //fs.open() とか fs.read() などの低レベルAPIを使わない限り出ない
-fsReadError.ENOTSUP = fsErrorPhase.arguments + "操作がサポートされていません"; //todo: 読み取り／書き取りでは起こりえないらしい。もっと詳しく
-fsReadError.EOPNOTSUPP = fsErrorPhase.arguments + "操作がサポートされていません"; //todo: 読み取り／書き取りでは起こりえないらしい。もっと詳しく
-fsReadError.EBADF = fsErrorPhase.arguments + "無効なファイルディスクリプタを利用したファイルアクセスが行われました"; //低レベルAPIを使わない限りこのエラーは捕捉されない
-fsReadError.EFAULT = fsErrorPhase.arguments + "ディスク内の無効なアドレスを読み取ろうとしたみたいです"; //todo: もっと詳しく
-fsReadError.ENFILE = fsErrorPhase.resource + "システム全体で開いているファイル数が多すぎるみたいです。TimeLimitedFileCache.maxConcurrentReadsGlobal の値を大きくしすぎているか、他にファイルを凄いいっぱい開いているプロセスがあるのかもしれません";
-fsReadError.ENOSPC = fsErrorPhase.resource + "ディスク容量不足です"; //読み取りでは起こりえない
-fsReadError.EMFILE = fsErrorPhase.resource + "このプロセスで開いているファイル数が多すぎるみたいです。TimeLimitedFileCache.maxConcurrentReadsGlobal の値を大きくしすぎていませんか？";
-fsReadError.ENOMEM = fsErrorPhase.resource + "ファイルを開くための空きメモリが少ないみたいです";
-fsReadError.EAGAIN = fsErrorPhase.resource + "非ブロッキングモードで受け取ったデータが処理しきれず再試行の必要があるみたいです"; //非ブロッキングモードは使用しないので発生しないらしい
-fsReadError.EWOULDBLOCK = fsErrorPhase.resource + "非ブロッキングモードで送り側がデータをこちらにまだ送れない状況なので再試行の必要があるみたいです"; //非ブロッキングモードは使用しないので発生しないらしい
-fsReadError.EIO = fsErrorPhase.resource + "ディスクに物理的な障害がある可能性があるみたいです"; //todo: もっと詳しく
-fsReadError.EPIPE = fsErrorPhase.resource + "相手側からパイプが切断されデータが送られてこない状態になっているみたいです"; //pipe の仕組みに対応していないので発生しないらしい。
-const readBufferError = {};
-const readStreamError = {};
-for(const key in fsReadError)
-{
-	readBufferError[key] = fsReadError[key];
-	readStreamError[key] = fsReadError[key];
-}
-readBufferError.ENOMEM += "readAsStream() メソッドに切り替え少しずつファイルから読み取るようにすると解決するかもしれません";
-readBufferError.ENOMEM += "readAsStream() メソッドに渡す引数 maxStreamBufferSize に大きな値を指定している場合は小さな値を設定するか、指定していない場合デフォルト値より小さな値を指定してみると解決するかもしれません";
-
-
-const writeError = (error)=>
-{
-	if(writeError[error.code]) return writeError[error.code];
-	else return "不明な書き込みエラーが発生しました";
-}
-
-const fsWriteError = {};
-fsWriteError.ENAMETOOLONG = fsReadError.ENAMETOOLONG;
-fsWriteError.EEXIST = fsErrorPhase.pathResolve + "指定されたファイルが他プロセスなどにより上書き禁止モードに設定されてしまっている可能性があります";
-fsWriteError.ENOENT = fsErrorPhase.pathResolve + "途中のディレクトリが削除されたかリネームされてしまった可能性があります";
-fsWriteError.ENXIO = fsReadError.ENXIO;
-fsWriteError.ENODEV = fsReadError.ENODEV;
-fsWriteError.ESTALE = fsReadError.ESTALE; //todo: 再試行戦略が出来るかもしれない
-fsWriteError.ENOTCONN = fsReadError.ENOTCONN; //fs API 以外でソケット接続のプロトコルでファイルのやり取りをしない限りこのエラーは発生しえないらしい
-fsWriteError.ETIMEDOUT = fsErrorPhase.timeout + "ネットワーク越しのファイルにアクセスしようとしましたが、タイムアウトされたみたいです"; //todo: もっと詳しく
-fsWriteError.ENOTDIR = fsErrorPhase.pathStruct + "ファイルパスの途中のディレクトリがファイルに変更されたみたいです"; //todo: 本当に合ってる？
-fsWriteError.ENOTEMPTY = fsReadError.ENOTEMPTY; //現状ディレクトリを削除するような実装は無いので発生しえない
-fsWriteError.ENOTBLK = fsErrorPhase.attributes + "ブロックデバイスではありませんでした"; //todo: もっと詳しく
-fsWriteError.ELOOP = fsErrorPhase.link + "シンボリックリンクの無限ループが見つかりました"; //todo: もっと詳しく
-fsWriteError.EISDIR = fsErrorPhase.open + "ディレクトリをファイルとして読み取ろうとしたみたいです"; //todo: 拡張子無しのファイルとして書き込まれる事にならない？ 既にディレクトリが存在してたらどうなるの？
-fsWriteError.ETXTBSY = fsErrorPhase.open + "実行中の実行ファイルを書き換えようとしたみたいです"; //todo: もっと詳しく
-fsWriteError.EACCES = fsErrorPhase.access + "書き込み権限のない既存のファイルを書き換えようとしたか、親ディレクトリの権限設定など、アクセス権の関係で書き込めませんでした。" + fsError.EACCES;
-fsWriteError.EPERM = fsErrorPhase.access + "管理者から許可設定がされていない操作、またはシステムレベルで許可されていない操作としてみなされた読み取り操作みたいです" + fsError.EPERM;
-fsWriteError.EROFS = fsErrorPhase.access + "読み取り専用のファイルシステム下のドライブ／ディレクトリ内のファイルに対して書き込みを行おうとしました";
-fsWriteError.EOVERFLOW = fsErrorPhase.arguments + "32bit OSで4GB越えのファイルを作ろうとしたみたいな事が起きたみたいです。キャッシュディレクトリに指定されたデバイスが FAT32 などの 32bit 制限であるファイルシステムだったりする可能性もあります"; //todo: もっと詳しく
-fsWriteError.EINVAL = fsErrorPhase.arguments + "無効な引数です"; //todo: もっと詳しく
-fsWriteError.ENOTSUP = fsErrorPhase.arguments + "操作がサポートされていません"; //todo: 読み取り／書き取りでは起こりえないらしい。もっと詳しく
-fsWriteError.EOPNOTSUPP = fsErrorPhase.arguments + "操作がサポートされていません"; //todo: 読み取り／書き取りでは起こりえないらしい。もっと詳しく
-fsWriteError.EBADF = fsReadError.EBADF; //低レベルAPIを使わない限りこのエラーは捕捉されない
-fsWriteError.EFAULT = fsErrorPhase.arguments + "ディスク内の無効なアドレスに書き込もうとしたみたいです"; //todo: もっと詳しく
-fsWriteError.ENFILE = fsReadError.ENFILE;
-fsWriteError.ENOSPC = fsErrorPhase.resource + "書き込もうとしているファイルのあるディスクが容量不足みたいです";
-fsWriteError.EMFILE = fsReadError.EMFILE;
-fsWriteError.ENOMEM = fsErrorPhase.resource + "ディスクに書き込むための空きメモリが少ないみたいです"; //todo: 本当に合ってる？
-fsWriteError.EAGAIN = fsErrorPhase.resource + "非ブロッキングモードで受け取り側がまだデータが処理しきれないみたいなので再試行の必要があるみたいです"; //非ブロッキングモードは使用しないので発生しないらしい
-fsWriteError.EWOULDBLOCK = fsErrorPhase.resource + "非ブロッキングモードで受け取り側にデータを送りたいけど、送りたいデータが用意出来ていなかったので再試行の必要があるみたいです"; //非ブロッキングモードは使用しないので発生しないらしい
-fsWriteError.EIO = fsErrorPhase.resource + "ディスクに物理的な障害がある可能性があるみたいです"; //todo: もっと詳しく
-fsWriteError.EPIPE = fsErrorPhase.resource + "相手側からパイプが切断されデータを渡せない状態になっているみたいです"; //pipe の仕組みに対応していないので発生しないらしい。
-
-const writeBufferError = {};
-const writeStreamError = {};
-for(const key in fsWriteError)
-{
-	writeBufferError[key] = fsWriteError[key];
-	writeStreamError[key] = fsWriteError[key];
-}
-writeBufferError.ENOMEM += "writeAsStream() メソッドに切り替え少しずつファイルに書き込むようにすると解決するかもしれません"; //todo: 本当に合ってる？
-writeStreamError.ENOMEM += "writeAsStream() から得られる WriteStreamAgent インスタンスの write() メソッドが返す Promise インスタンスが解決されるのを逐一待ちながら書き込むか、writeAsStream() メソッドの引数 maxStreamBufferSize の値が大きすぎて書き込みバッファのメモリが溢れてしまっているのかもしれません"; //todo: 本当に合ってる？
-
 module.exports = TimeLimitedFileCache;
