@@ -20,6 +20,9 @@ class Log
 		return message;
 	}
 
+	/** @type {Object.<Error>} */
+	static errors = {};
+
 	/**
 	 *
 	 * @param {TimeLimitManager|{filePath:string}} manager
@@ -176,9 +179,6 @@ class Log
 
 	/** 書き込み待機中に新しいデータの書き込み要求が発生したため、古い書き込み要求はスキップされました */
 	static WRITE_SKIPPED_DUE_TO_NEW_WRITE = "書き込み待機中に新しいデータの書き込み要求が発生したため、古い書き込み要求はスキップされました";
-
-	/** 書き込み待機中に新しいデータの書き込み要求が発生したため、古い書き込みストリームの要求はスキップされました */
-	static WRITE_STREAM_SKIPPED_DUE_TO_NEW_WRITE = "書き込み待機中に新しいデータの書き込み要求が発生したため、古い書き込みストリームの要求はスキップされました";
 
 	/** 書き込みしようとしたデータがファイルの内容と同一のため、ファイルシステムへの書き込みはされませんでした */
 	static WRITE_SKIPPED_DATA_UNCHANGED = "書き込みしようとしたデータがファイルの内容と同一のため、ファイルシステムへの書き込みはされませんでした";

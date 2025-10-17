@@ -367,8 +367,8 @@ class TimeLimitManager
 	/**
 	 * @typedef {object} ReadFuncOptions
 	 * @property {number} [maxStreamBufferSize]
-	 * @property {(value?:any)=>void} resolve
-	 * @property {(reasons?:any)=>void} reject
+	 * @property {(readStreamAgent:ReadStreamAgent)=>void} streamReadyResolve
+	 * @property {(reasons?:any)=>void} streamInitFailedReject
 	 */
 
 	/** @type {Array.<{readFunc:(options:ReadFuncOptions)=>any, options:ReadFuncOptions}>} */
@@ -556,20 +556,6 @@ class TimeLimitManager
 	{
 		return new Promise((resolve, reject)=>
 		{
-			/*if(!this.#writing)
-			{
-				this.#createReadStreamAgent(maxStreamBufferSize, resolve, reject);
-			}
-			else
-			{
-				if(logger)
-					logger.log(this, logger.READ_STREAM_QUEUED_DUE_TO_WRITING);
-
-				this.#writing.then(()=>
-				{
-					this.#createReadStreamAgent(maxStreamBufferSize, resolve, reject);
-				})
-			}*/
 			this.#tryCreateReadStreamAgent(maxStreamBufferSize, resolve, reject);
 		});
 	}
@@ -593,19 +579,23 @@ class TimeLimitManager
 		}
 	}
 
-	#createReadStreamAgent(maxStreamBufferSize, resolve, reject)
+	#createReadStreamAgent(maxStreamBufferSize, streamReadyResolve, streamInitFailedReject)
 	{
 		if(this.#readings.length < this.maxConcurrentReads)
-			this.#createReadStreamAgentFunc({maxStreamBufferSize, resolve, reject});
+			this.#createReadStreamAgentFunc({maxStreamBufferSize, streamReadyResolve, streamInitFailedReject});
 		else
 		{
 			if(logger)
 				logger.log(this, logger.READ_STREAM_QUEUE_DUE_TO_FILE_READ_LIMIT);
 
-			this.#readWait.push({readFunc: (options)=>this.#createReadStreamAgentFunc(options), options:{maxStreamBufferSize, resolve, reject}});
+			this.#readWait.push({readFunc: (options)=>this.#createReadStreamAgentFunc(options), options:{maxStreamBufferSize, streamReadyResolve, streamInitFailedReject}});
 		}
 	}
 
+	/**
+	 *
+	 * @param {ReadFuncOptions} options
+	 */
 	#createReadStreamAgentFunc(options)
 	{
 		const fileReading = new Promise((resolve, reject) =>
@@ -613,7 +603,8 @@ class TimeLimitManager
 			acquireGlobalReadSlot(this).then(()=>
 			{
 				const maxStreamBufferSize = options.maxStreamBufferSize;
-				const streamCreatedResolve = options.resolve;
+				options.resolve = resolve;
+				options.reject = reject;
 
 				if(logger)
 					logger.log(this, logger.READ_STREAM_READY);
@@ -625,8 +616,8 @@ class TimeLimitManager
 				{
 					this.#updateTimeLimit();
 				});
-				// streamCreatedResolve(new ReadStreamAgent(readStream, this, promise, _resolve, _reject));
-				streamCreatedResolve(new ReadStreamAgent(readStream, this, fileReading, resolve, reject));
+				// streamReadyResolve(new ReadStreamAgent(readStream, this, promise, _resolve, _reject));
+				new ReadStreamAgent(readStream, this, fileReading, resolve, reject);
 
 				const finalize = ()=>
 				{
@@ -661,8 +652,18 @@ class TimeLimitManager
 
 			this.#updateTimeLimit();
 
+			if(this.#pendingWrite)
+			{
+				this.#pendingWrite(TimeLimitedFileCache.WRITE_RESULT.CANCELED_BY_NEWER_REQUEST);
+
+				if(logger)
+					logger.log(this, logger.WRITE_SKIPPED_DUE_TO_NEW_WRITE);
+			}
+
 			if(this.#data && this.#data.byteLength === buf.byteLength && this.#data.equals(buf))
 			{
+				this.#pendingWrite = null;
+
 				if(logger)
 					logger.log(this, logger.WRITE_SKIPPED_DATA_UNCHANGED);
 
@@ -670,13 +671,6 @@ class TimeLimitManager
 			}
 			else
 			{
-				if(this.#pendingWrite)
-				{
-					if(logger)
-						logger.log(this, logger.WRITE_SKIPPED_DUE_TO_NEW_WRITE);
-
-					this.#pendingWrite(TimeLimitedFileCache.WRITE_RESULT.CANCELED_BY_NEWER_REQUEST);
-				}
 				this.#pendingWrite = resolve;
 
 				if(!this.#readings.length && !this.#writing)
@@ -786,7 +780,7 @@ class TimeLimitManager
 				this.#pendingWrite(TimeLimitedFileCache.WRITE_RESULT.CANCELED_BY_NEWER_REQUEST);
 
 				if(logger)
-					logger.log(this, logger.WRITE_STREAM_SKIPPED_DUE_TO_NEW_WRITE);
+					logger.log(this, logger.WRITE_SKIPPED_DUE_TO_NEW_WRITE);
 			}
 			this.#pendingWrite = resolve;
 
@@ -971,6 +965,14 @@ class ReadStreamAgent extends EventEmitter
 
 	#globalReadSlotReleased = false;
 
+	#opened = false;
+
+	#ready = false;
+
+	#end = false;
+
+	#data = false;
+
 	/**
 	 *
 	 * @param {TimeLimitManager} manager
@@ -985,21 +987,40 @@ class ReadStreamAgent extends EventEmitter
 	}
 
 	/**
+	 * @typedef {Object} ReadStreamAgentOptions
+	 * @property {function(ReadStreamAgent):void} resolve
+	 * @property {(reasons?:any)=>void} reject
+	 * @property {number} [maxStreamBufferSize]
+	 * @property {function(ReadStreamAgent):void} streamReadyResolve
+	 * @property {(reasons?:any)=>void} streamInitFailedReject
+	 */
+
+	/**
 	 *
 	 * @param {fs.ReadStream} readStream
 	 * @param {TimeLimitManager} parent
 	 * @param {Promise<ReadStreamAgent>} promise
-	 * @param {(readStreamAgent:ReadStreamAgent)=>void} resolve
-	 * @param {(reasons?:any)=>void} reject
+	 * @param {ReadStreamAgentOptions} options
 	 */
-	constructor(readStream, parent, promise, resolve, reject)
+	constructor(readStream, parent, promise, options)
 	{
 		super();
+		/** @type {function(ReadStreamAgent):void} */
+		const resolve = options.resolve;
+		/** @type {(reasons?:any)=>void} */
+		const reject = options.reject;
+		/** @type {function(ReadStreamAgent): void} */
+		const streamReadyResolve = options.streamReadyResolve;
+		/** @type {(reasons?:any)=>void} */
+		const streamInitFailedReject = options.streamInitFailedReject;
+
 		this.#parent = parent;
 		const self = this;
 		this.#endPromise = promise;
 		const onReadStreamData = (data) =>
 		{
+			this.#data = true;
+
 			if(logger)
 				logger.log(this.#parent, logger.READ_STREAM_CHUNK_READ);
 
@@ -1007,6 +1028,7 @@ class ReadStreamAgent extends EventEmitter
 		}
 		const onEnd = ()=>
 		{
+			this.#end = true;
 			if(logger)
 				logger.log(this.#parent, logger.READ_STREAM_COMPLETE);
 
@@ -1014,7 +1036,6 @@ class ReadStreamAgent extends EventEmitter
 				self.removeAllListeners("data");
 
 			readStream.off("data", onReadStreamData);
-			readStream.off("error", onError);
 			readStream.close();
 			self.emit("end");
 
@@ -1032,6 +1053,8 @@ class ReadStreamAgent extends EventEmitter
 			readStream.off("data", onReadStreamData);
 			readStream.off("end", onEnd);
 			readStream.off("error", onError);
+			readStream.off("open", onOpen);
+			readStream.off("ready", onReady);
 			self.emit("close");
 
 			if(self.#endOptions.waitForClose)
@@ -1042,22 +1065,44 @@ class ReadStreamAgent extends EventEmitter
 		}
 		const onError = (error) =>
 		{
-			readStream.off("data", onReadStreamData);
-			readStream.off("end", onEnd);
-			readStream.close();
-			self.emit("error", error);
-			this.#releaseGlobalReadSlotOnce(this.#parent);
+			if(logger)
+				logger.errors[error.code] = error;
 
 			if(logger)
 				logger.log(this.#parent, logger.READ_STREAM_ERROR, error);
 
+			readStream.off("data", onReadStreamData);
+			readStream.off("end", onEnd);
+			readStream.off("open", onOpen);
+			readStream.off("ready", onReady);
+			readStream.close();
+			self.emit("error", error);
+			this.#releaseGlobalReadSlotOnce(this.#parent);
+
+			if(!this.#opened)
+			{
+				//todo: ここから！！！！
+			}
 			reject({error, readStreamAgent:self});
+		}
+		const onOpen = ()=>
+		{
+			this.#opened = true;
+		}
+		const onReady = ()=>
+		{
+			if(logger)
+				logger.log(this.#parent, logger.READ_STREAM_READY);
+
+			this.#ready = true;
 		}
 
 		readStream.on("data", onReadStreamData);
 		readStream.once("end", onEnd);
 		readStream.once("close", onClose);
 		readStream.once("error", onError);
+		readStream.once("open", onOpen);
+		readStream.once("ready", onReady);
 	}
 
 	/**

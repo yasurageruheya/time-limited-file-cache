@@ -22,5 +22,26 @@
 
 === write stream(waitForClose:false) 16,383 * 2 / 16,384 バイト, write stream(waitForClose:true) 16,383 * 2 / 16,384 バイト テスト ===
 
-=== write stream(waitForClose:false) 16,383 * 2 / 16,384 バイト, read stream(waitForClose:false) 16,384*2/16,383 バイト, write stream(waitForClose:true) 16,383/16,384 バイト テスト ===
+=== write stream(waitForClose:false) 16,383 * 2 / 16,384 バイト, read stream(waitForClose:false) 16,383*2/16,383 バイト, write stream(waitForClose:true) 16,383/16,384 バイト テスト ===
 
+=== write stream(waitForClose:false) 16,383 * 2 / 16,384 バイト, write stream(waitForClose:false) 16,383/16,384 バイト, read stream(waitForClose:true) 16,383*2/16,383 バイト テスト ===
+
+=== write stream(waitForClose:true) 16,383 * 2 / 16,384 バイト, write stream(waitForClose:true) 16,383/16,384 バイト, read stream(waitForClose:true) 16,383/16,383 バイト テスト ===
+
+=== read stream(waitForClose:true) 16,383/16,383 バイト, write stream() ←スキップされるはず, write stream(waitForClose:true) 16,383/16,384 バイト テスト ===
+
+=== read stream(waitForClose:false) 16,383/16,383 バイト, write stream() ←スキップされるはず, write stream(waitForClose:true) 16,383/16,384 バイト テスト ===
+
+=== write stream(waitForClose:true) 16,383*2/16,384 バイト, write stream() ←スキップされるはず, write stream(waitForClose:true) 16,383/16,384 バイト テスト ===
+
+=== write stream(waitForClose:true) 16,383*2/16,384*2 バイト ※内部バッファが満杯にならない（'drain' イベントは発生しない）はず ===
+
+=== file read, write stream() ←スキップされるはず, write stream(waitForClose:true) 16,383/16,384 バイト テスト ===
+
+=== file write, write stream(waitForClose:true) 16,383/16,384 バイト テスト ===
+
+=== file write, write stream() ←スキップされるはず, 同一値 file write ←スキップされるはず テスト ===
+
+=== memory read, read stream(waitForClose:false), memory read テスト ===
+
+=== file write, write stream() ←スキップされるはず, file write テスト ===

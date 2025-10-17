@@ -44,7 +44,7 @@ const checkBinary = buffer =>
 		}
 	}
 	return "undefined";
-}
+};
 
 let count = 0;
 const estimateLog = [];
@@ -64,6 +64,33 @@ const waitMemoryRemoved = ()=>
 	{
 		setTimeout(resolve, memoryTTL + 10);
 	})
+}
+
+const estimateWriteCompleteSuccessfully = (result)=>
+{
+	estimateLog.push("then の引数に TimeLimitedFileCache.WRITE_RESULT.COMPLETED_SUCCESSFULLY が入っていました");
+	if(result === TimeLimitedFileCache.WRITE_RESULT.COMPLETED_SUCCESSFULLY)
+		fileCache.log.push("then の引数に TimeLimitedFileCache.WRITE_RESULT.COMPLETED_SUCCESSFULLY が入っていました");
+	else
+		fileCache.log.push("then の引数に TimeLimitedFileCache.WRITE_RESULT.COMPLETED_SUCCESSFULLY が入っていませんでした");
+}
+
+const estimateWriteCanceledByNewerRequest = result =>
+{
+	estimateLog.push("then の引数に TimeLimitedFileCache.WRITE_RESULT.CANCELED_BY_NEWER_REQUEST が入っていました");
+	if(result === TimeLimitedFileCache.WRITE_RESULT.CANCELED_BY_NEWER_REQUEST)
+		fileCache.log.push("then の引数に TimeLimitedFileCache.WRITE_RESULT.CANCELED_BY_NEWER_REQUEST が入っていました");
+	else
+		fileCache.log.push("then の引数に TimeLimitedFileCache.WRITE_RESULT.CANCELED_BY_NEWER_REQUEST が入っていませんでした");
+}
+
+const estimateWriteSkippedSameAsMemoryCache = result =>
+{
+	estimateLog.push("then の引数に TimeLimitedFileCache.WRITE_RESULT.SKIPPED_SAME_AS_MEMORY_CACHE が入っていました");
+	if(result === TimeLimitedFileCache.WRITE_RESULT.SKIPPED_SAME_AS_MEMORY_CACHE)
+		fileCache.log.push("then の引数に TimeLimitedFileCache.WRITE_RESULT.SKIPPED_SAME_AS_MEMORY_CACHE が入っていました");
+	else
+		fileCache.log.push("then の引数に TimeLimitedFileCache.WRITE_RESULT.SKIPPED_SAME_AS_MEMORY_CACHE が入っていませんでした");
 }
 
 const waitFileRemoved = ()=>
@@ -1449,15 +1476,12 @@ TimeLimitedFileCache.fromDirectory(dirName, false, memoryTTL, fileTTL).then(time
 	fileCache.writeAsStream(fileName, 16384).then(result =>
 	{
 		estimateLog.push(filePath + " : " + logger.WRITE_STREAM_QUEUED_DUE_TO_FILE_READING);
-		estimateLog.push(filePath + " : " + logger.WRITE_STREAM_SKIPPED_DUE_TO_NEW_WRITE);
+		estimateLog.push(filePath + " : " + logger.WRITE_SKIPPED_DUE_TO_NEW_WRITE);
 		estimateLog.push(filePath + " : " + logger.WRITE_STREAM_QUEUED_DUE_TO_FILE_READING);
 		estimateLog.push(filePath + " : " + logger.READ_STREAM_READY);
 
-		estimateLog.push("then の引数に TimeLimitedFileCache.WRITE_RESULT.CANCELED_BY_NEWER_REQUEST が入っていました");
-		if(result === TimeLimitedFileCache.WRITE_RESULT.CANCELED_BY_NEWER_REQUEST)
-			fileCache.log.push("then の引数に TimeLimitedFileCache.WRITE_RESULT.CANCELED_BY_NEWER_REQUEST が入っていました");
-		else
-			fileCache.log.push("then の引数に TimeLimitedFileCache.WRITE_RESULT.CANCELED_BY_NEWER_REQUEST が入っていませんでした");
+		estimateWriteCanceledByNewerRequest(result);
+
 		compareLog();
 	});
 
@@ -1502,15 +1526,12 @@ TimeLimitedFileCache.fromDirectory(dirName, false, memoryTTL, fileTTL).then(time
 	fileCache.writeAsStream(fileName, 16384).then(result =>
 	{
 		estimateLog.push(filePath + " : " + logger.WRITE_STREAM_QUEUED_DUE_TO_FILE_READING);
-		estimateLog.push(filePath + " : " + logger.WRITE_STREAM_SKIPPED_DUE_TO_NEW_WRITE);
+		estimateLog.push(filePath + " : " + logger.WRITE_SKIPPED_DUE_TO_NEW_WRITE);
 		estimateLog.push(filePath + " : " + logger.WRITE_STREAM_QUEUED_DUE_TO_FILE_READING);
 		estimateLog.push(filePath + " : " + logger.READ_STREAM_READY);
 
-		estimateLog.push("then の引数に TimeLimitedFileCache.WRITE_RESULT.CANCELED_BY_NEWER_REQUEST が入っていました");
-		if(result === TimeLimitedFileCache.WRITE_RESULT.CANCELED_BY_NEWER_REQUEST)
-			fileCache.log.push("then の引数に TimeLimitedFileCache.WRITE_RESULT.CANCELED_BY_NEWER_REQUEST が入っていました");
-		else
-			fileCache.log.push("then の引数に TimeLimitedFileCache.WRITE_RESULT.CANCELED_BY_NEWER_REQUEST が入っていませんでした");
+		estimateWriteCanceledByNewerRequest(result);
+
 		compareLog();
 	});
 
@@ -1537,7 +1558,7 @@ TimeLimitedFileCache.fromDirectory(dirName, false, memoryTTL, fileTTL).then(time
 	{
 		estimateLog.push(filePath + " : " + logger.WRITE_STREAM_READY);
 		estimateLog.push(filePath + " : " + logger.WRITE_STREAM_QUEUED_DUE_TO_FILE_WRITING);
-		estimateLog.push(filePath + " : " + logger.WRITE_STREAM_SKIPPED_DUE_TO_NEW_WRITE);
+		estimateLog.push(filePath + " : " + logger.WRITE_SKIPPED_DUE_TO_NEW_WRITE);
 		estimateLog.push(filePath + " : " + logger.WRITE_STREAM_QUEUED_DUE_TO_FILE_WRITING);
 		compareLog();
 
@@ -1562,11 +1583,7 @@ TimeLimitedFileCache.fromDirectory(dirName, false, memoryTTL, fileTTL).then(time
 		estimateLog.push(filePath + " : " + logger.WRITE_STREAM_BUFFER_FULL);
 		estimateLog.push(filePath + " : " + logger.WRITE_STREAM_FINISH_REQUESTED);
 
-		estimateLog.push("then の引数に TimeLimitedFileCache.WRITE_RESULT.CANCELED_BY_NEWER_REQUEST が入っていました");
-		if(result === TimeLimitedFileCache.WRITE_RESULT.CANCELED_BY_NEWER_REQUEST)
-			fileCache.log.push("then の引数に TimeLimitedFileCache.WRITE_RESULT.CANCELED_BY_NEWER_REQUEST が入っていました");
-		else
-			fileCache.log.push("then の引数に TimeLimitedFileCache.WRITE_RESULT.CANCELED_BY_NEWER_REQUEST が入っていませんでした");
+		estimateWriteCanceledByNewerRequest(result);
 
 		compareLog();
 	});
@@ -1609,34 +1626,285 @@ TimeLimitedFileCache.fromDirectory(dirName, false, memoryTTL, fileTTL).then(time
 
 	console.log("=== file read, write stream() ←スキップされるはず, write stream(waitForClose:true) 16,383/16,384 バイト テスト ====");
 
-	fileCache.readAsBuffer(fileName).then(data =>
+	fileCache.readAsBuffer(fileName).then(() =>
 	{
+		estimateLog.push(filePath + " : " + logger.READ_COMPLETE_FROM_FILE_SYSTEM + " " + logger.outputDataForLog(data16383x2A));
+		estimateLog.push(filePath + " : " + logger.UPDATED_MEMORY_CACHE_AFTER_READ_FROM_FILE);
+
 		compareLog();
 	});
 	
 	fileCache.writeAsStream(fileName, 16384).then(result =>
 	{
+		// readAsBuffer 完了前に書き込みキャンセルが発生するため、ここに読み取り開始のログが来る
 		estimateLog.push(filePath + " : " + logger.READ_START_FROM_FILE_SYSTEM);
-		estimateLog.push(filePath + " : " + logger.WRITE_STREAM_QUEUED_DUE_TO_FILE_WRITING);
-		estimateLog.push(filePath + " : " + logger.WRITE_STREAM_SKIPPED_DUE_TO_NEW_WRITE);
-		estimateLog.push(filePath + " : " + logger.WRITE_STREAM_QUEUED_DUE_TO_FILE_WRITING);
-		estimateLog.push(filePath + " : " + logger.READ_COMPLETE_FROM_FILE_SYSTEM + " " + logger.outputDataForLog(data16383x2A));
-		//todo: エラーログ見たら多分ここら辺の修正からになるはず！！！
-		// compareLog();
+		estimateLog.push(filePath + " : " + logger.WRITE_STREAM_QUEUED_DUE_TO_FILE_READING);
+		estimateLog.push(filePath + " : " + logger.WRITE_SKIPPED_DUE_TO_NEW_WRITE);
+		estimateLog.push(filePath + " : " + logger.WRITE_STREAM_QUEUED_DUE_TO_FILE_READING);
+
+		estimateWriteCanceledByNewerRequest(result);
+
+		compareLog();
 	});
 	
 	return fileCache.writeAsStream(fileName, 16384);
 }).then(writeStreamAgent =>
 {
-	// compareLog();
+	estimateLog.push(filePath + " : " + logger.WRITE_STREAM_STARTED_FROM_QUEUE_AFTER_FILE_READ);
+	estimateLog.push(filePath + " : " + logger.WRITE_STREAM_READY);
+	compareLog();
 	
 	writeStreamAgent.write(data16383A).then();
-	writeStreamAgent.end();
+	return writeStreamAgent.end({waitForClose: true});
 }).then(()=>
 {
-	// compareLog();
-	
+	estimateLog.push(filePath + " : " + logger.WRITE_STREAM_CHUNK_WRITE_BEGIN);
+	estimateLog.push(filePath + " : " + logger.WRITE_STREAM_CHUNK_ACCEPTED);
+	estimateLog.push(filePath + " : " + logger.WRITE_STREAM_FINISH_REQUESTED);
+	estimateLog.push(filePath + " : " + logger.WRITE_STREAM_ALL_DATA_COMPLETED);
+	estimateLog.push(filePath + " : " + logger.WRITE_STREAM_CLOSED);
+	compareLog();
+
+	console.log("=== file write, write stream(waitForClose:true) 16,383/16,384 バイト テスト ====");
+
+	fileCache.writeAsBuffer(fileName, str).then(()=>
+	{
+		estimateLog.push(filePath + " : " + logger.WRITE_START);
+		estimateLog.push(filePath + " : " + logger.UPDATED_MEMORY_CACHE + " " + str);
+		estimateLog.push(filePath + " : " + logger.WRITE_STREAM_QUEUED_DUE_TO_FILE_WRITING);
+		estimateLog.push(filePath + " : " + logger.WRITE_COMPLETE_TO_FILE_SYSTEM);
+		estimateLog.push(filePath + " : " + logger.WRITE_STREAM_STARTED_FROM_QUEUE_AFTER_FILE_WRITE);
+		estimateLog.push(filePath + " : " + logger.WRITE_STREAM_READY);
+		compareLog();
+	});
+
+	return fileCache.writeAsStream(fileName, 16384);
+
+}).then(writeFileAgent =>
+{
+	compareLog();
+
+	writeFileAgent.write(data16383A).then();
+	return writeFileAgent.end({waitForClose: true});
+}).then(()=>
+{
+	estimateLog.push(filePath + " : " + logger.WRITE_STREAM_CHUNK_WRITE_BEGIN);
+	estimateLog.push(filePath + " : " + logger.WRITE_STREAM_CHUNK_ACCEPTED);
+	estimateLog.push(filePath + " : " + logger.WRITE_STREAM_FINISH_REQUESTED);
+	estimateLog.push(filePath + " : " + logger.WRITE_STREAM_ALL_DATA_COMPLETED);
+	estimateLog.push(filePath + " : " + logger.WRITE_STREAM_CLOSED);
+	compareLog();
+
+	console.log("=== file write, write stream() ←スキップされるはず, 同一値 file write ←スキップされるはず テスト ====");
+
+	nextData();
+
+	const writePromise = fileCache.writeAsBuffer(fileName, str);
+
+	fileCache.writeAsStream(fileName, 16384).then(result =>
+	{
+		estimateLog.push(filePath + " : " + logger.WRITE_START);
+		estimateLog.push(filePath + " : " + logger.UPDATED_MEMORY_CACHE + " " + str);
+		estimateLog.push(filePath + " : " + logger.WRITE_STREAM_QUEUED_DUE_TO_FILE_WRITING);
+		estimateLog.push(filePath + " : " + logger.WRITE_SKIPPED_DUE_TO_NEW_WRITE);
+		estimateLog.push(filePath + " : " + logger.WRITE_SKIPPED_DATA_UNCHANGED);
+
+		estimateWriteCanceledByNewerRequest(result);
+
+		compareLog();
+	});
+
+	fileCache.writeAsBuffer(fileName, str).then(result =>
+	{
+		estimateWriteSkippedSameAsMemoryCache(result);
+
+		compareLog();
+	});
+
+	return writePromise;
+}).then(()=>
+{
+	estimateLog.push(filePath + " : " + logger.WRITE_COMPLETE_TO_FILE_SYSTEM);
+	compareLog();
+
+	console.log("=== memory read, read stream(waitForClose:false), memory read テスト ====");
+
+	fileCache.readAsBuffer(fileName).then(data =>
+	{
+		estimateLog.push(filePath + " : " + logger.READ_FROM_MEMORY_CACHE + " " + str);
+		estimateLog.push(filePath + " : " + logger.READ_FROM_MEMORY_CACHE + " " + str);
+		estimateLog.push("受け取ったデータ : " + str);
+		fileCache.log.push("受け取ったデータ : " + logger.outputDataForLog(data));
+		compareLog();
+	});
+
+	const readPromise = fileCache.readAsStream(fileName, 16384);
+
+	fileCache.readAsBuffer(fileName).then(data =>
+	{
+		estimateLog.push(filePath + " : " + logger.READ_STREAM_READY);
+		estimateLog.push("受け取ったデータ : " + str);
+		fileCache.log.push("受け取ったデータ : " + logger.outputDataForLog(data));
+		compareLog();
+	});
+
+	return readPromise;
+}).then(readStreamAgent =>
+{
+	compareLog();
+	readStreamAgent.once("data", data =>
+	{
+		estimateLog.push(filePath + " : " + logger.READ_STREAM_CHUNK_READ);
+		fileCache.log.push("バイナリ : " + logger.outputDataForLog(data));
+		estimateLog.push("バイナリ : " + str);
+		compareLog();
+	});
+
+	return readStreamAgent.end({waitForClose: false});
+}).then(()=>
+{
+	estimateLog.push(filePath + " : " + logger.READ_STREAM_COMPLETE);
+	compareLog();
+
+	return waitFileRemoved();
+}).then(()=>
+{
+	estimateLog.push(filePath + " : " + logger.READ_STREAM_CLOSED);
+	estimateLog.push(filePath + " : " + logger.REMOVE_MEMORY_CACHE);
+	estimateLog.push(filePath + " : " + logger.REMOVE_START_CACHE_FILE);
+	estimateLog.push(filePath + " : " + logger.REMOVE_CACHE_FILE);
+	compareLog();
+
+	console.log("=== file write, write stream() ←スキップされるはず, file write テスト ====");
+	nextData();
+
+	fileCache.writeAsBuffer(fileName, str).then(result =>
+	{
+		estimateLog.push(filePath + " : " + logger.WRITE_COMPLETE_TO_FILE_SYSTEM);
+		estimateLog.push(filePath + " : " + logger.WRITE_START_FROM_QUEUE_AFTER_WRITE);
+		estimateLog.push(filePath + " : " + logger.WRITE_START);
+		estimateWriteCompleteSuccessfully(result);
+
+		compareLog();
+	});
+
+	fileCache.writeAsStream(fileName, 16834).then(result =>
+	{
+		estimateLog.push(filePath + " : " + logger.WRITE_START);
+		estimateLog.push(filePath + " : " + logger.UPDATED_MEMORY_CACHE + " " + (+str - 1));
+		estimateLog.push(filePath + " : " + logger.WRITE_STREAM_QUEUED_DUE_TO_FILE_WRITING);
+		estimateLog.push(filePath + " : " + logger.WRITE_SKIPPED_DUE_TO_NEW_WRITE);
+		estimateLog.push(filePath + " : " + logger.WRITE_QUEUED_DUE_TO_WRITING + " " + str);
+		estimateLog.push(filePath + " : " + logger.UPDATED_MEMORY_CACHE + " " + str);
+		estimateWriteCanceledByNewerRequest(result);
+
+		compareLog();
+	});
+
+	nextData();
+	return fileCache.writeAsBuffer(fileName, str);
+}).then(result =>
+{
+	estimateLog.push(filePath + " : " + logger.WRITE_COMPLETE_TO_FILE_SYSTEM);
+
+	estimateWriteCompleteSuccessfully(result);
+
+	compareLog();
+
+	console.log("=== read stream(waitForClose: true) * 5 テスト ====");
+
+	fileCache.readAsStream(fileName, 16384).then(readStreamAgent =>
+	{
+		estimateLog.push(filePath + " : " + logger.READ_STREAM_QUEUE_DUE_TO_FILE_READ_LIMIT);
+		let i = 4;
+		while(i--)
+		{
+			estimateLog.push(filePath + " : " + logger.READ_STREAM_READY);
+		}
+		compareLog();
+		readStreamAgent.once("data", data =>
+		{
+			estimateLog.push(filePath + " : " + logger.READ_STREAM_CHUNK_READ);
+			fileCache.log.push("バイナリ : " + logger.outputDataForLog(data));
+			estimateLog.push("バイナリ : " + str);
+			compareLog();
+		});
+		return readStreamAgent.end({waitForClose: true});
+	}).then(()=>
+	{
+		let i = 4;
+		while (i--)
+		{
+			estimateLog.push(filePath + " : " + logger.READ_STREAM_COMPLETE);
+		}
+		estimateLog.push(filePath + " : " + logger.READ_STREAM_CLOSED);
+		estimateLog.push(filePath + " : " + logger.READ_STREAM_READY);
+		compareLog();
+	});
+
+	let i = 3;
+	while(i--)
+	{
+		fileCache.readAsStream(fileName, 16384).then(readStreamAgent =>
+		{
+			compareLog();
+			readStreamAgent.once("data", data =>
+			{
+				estimateLog.push(filePath + " : " + logger.READ_STREAM_CHUNK_READ);
+				fileCache.log.push("バイナリ : " + logger.outputDataForLog(data));
+				estimateLog.push("バイナリ : " + str);
+				compareLog();
+			});
+			return readStreamAgent.end({waitForClose: true});
+		}).then(()=>
+		{
+			estimateLog.push(filePath + " : " + logger.READ_STREAM_CLOSED);
+			compareLog();
+		});
+	}
+
+	return fileCache.readAsStream(fileName, 16384);
+}).then(readStreamAgent =>
+{
+	readStreamAgent.once("data", data =>
+	{
+		estimateLog.push(filePath + " : " + logger.READ_STREAM_CHUNK_READ);
+		fileCache.log.push("バイナリ : " + logger.outputDataForLog(data));
+		estimateLog.push("バイナリ : " + str);
+		compareLog();
+	});
+	return readStreamAgent.end({waitForClose: true});
+}).then(()=>
+{
+	estimateLog.push(filePath + " : " + logger.READ_STREAM_COMPLETE);
+	estimateLog.push(filePath + " : " + logger.READ_STREAM_CLOSED);
+	compareLog();
+
+	return waitFileRemoved();
+}).then(()=>
+{
+	estimateLog.push(filePath + " : " + logger.REMOVE_MEMORY_CACHE);
+	estimateLog.push(filePath + " : " + logger.REMOVE_START_CACHE_FILE);
+	estimateLog.push(filePath + " : " + logger.REMOVE_CACHE_FILE);
+	compareLog();
+
+	console.log("=== 存在しないファイルに対して read stream(waitForClose: true) テスト ====");
+
+	return fileCache.readAsStream(fileName, 16384);
+}).then(readStreamAgent =>
+{
+	estimateLog.push(filePath + " : " + logger.READ_STREAM_READY);
+	compareLog();
+	readStreamAgent.once("error", error =>
+	{
+		estimateLog.push(filePath + " : " + logger.READ_STREAM_ERROR + " " + error);
+		compareLog();
+	})
+
 	console.log("エラーカウント:", count);
+}).catch(result =>
+{
+	console.log("!!!!", result);
 });
 // compareLog();
 
