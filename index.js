@@ -2,6 +2,14 @@ const fs = require('fs');
 const path = require('path');
 const {EventEmitter} = require('events');
 
+/** @type {Object.<string>} */
+const entityKeyFromPath = {};
+/** @type {Object.<Set<string>>} */
+const pathsFromEntityKey = {};
+
+/** @type {Set<string>} */
+const checked = new Set();
+
 /** @type {Object.<TimeLimitedFileCache>} */
 const caches = {};
 
@@ -141,6 +149,79 @@ class TimeLimitedFileCache
 	/** @type {Object.<TimeLimitManager>} */
 	#children = {};
 
+	/**
+	 *
+	 * @param {TimeLimitManager} manager
+	 */
+	#onRemoveChild(manager)
+	{
+		delete this.#children[manager.entityKey];
+	}
+
+	/**
+	 *
+	 * @param {string} fileName
+	 * @param {"r"|"w"} flags
+	 * @return {Promise<{manager:TimeLimitManager, fileHandle:FileHandle}|Error>}
+	 */
+	#getTimeLimitManager(fileName, flags)
+	{
+		const fullPath = path.join(this.directory, fileName);
+		return new Promise((resolve, reject)=>
+		{
+			if(!checked.has(fileName))
+			{
+				if(fileName.includes(path.sep)) throw FILE_NAME_DIRECTORY_SEPARATOR_ERROR;
+				else checked.add(fileName);
+			}
+
+			/** @type {FileHandle} */
+			let fileHandle;
+			fs.promises.open(fullPath, flags)
+			.catch(error =>
+			{
+				if(error) return reject(error); //todo Promise の中断方法の確認！！！ Copilotに聞く！！
+			})
+			.then(fh =>
+			{
+				fileHandle = fh;
+
+				if(flags === "r" && entityKeyFromPath[fullPath])
+					resolve({manager: this.#children[entityKeyFromPath[fullPath]], fileHandle});
+				else return fh.stat({bigint: true});
+			})
+			.catch(error =>
+			{
+				if(error) return reject(error);
+			})
+			.then(stats =>
+			{
+				const dev = typeof stats.dev === "bigint" ? stats.dev : BigInt(stats.dev);
+				const ino = typeof stats.ino === "bigint" ? stats.ino : BigInt(stats.ino);
+				const entityKey = `${dev}:${ino}`;
+
+				if(entityKeyFromPath[fullPath] && entityKeyFromPath[fullPath] !== entityKey)
+				{
+					const paths = pathsFromEntityKey[entityKey];
+					paths.forEach(path => {
+						delete entityKeyFromPath[path];
+						paths.delete(path);
+					});
+				}
+				entityKeyFromPath[fullPath] = entityKey;
+				if(typeof pathsFromEntityKey[entityKey] === "undefined")
+					pathsFromEntityKey[entityKey] = new Set();
+
+				pathsFromEntityKey[entityKey].add(fullPath);
+
+				if(typeof this.#children[entityKey] === "undefined")
+					this.#children[entityKey] = new TimeLimitManager(this, entityKey, fileName, this.#onRemoveChild);
+
+				resolve({manager:this.#children[entityKey], fileHandle});
+			});
+		});
+	}
+
 	constructor(directory)
 	{
 		if(!TimeLimitedFileCache.#enableConstruction) throw new Error("new TimeLimitedFileCache() は禁止されてますよ。初期化処理をちゃんとしたいので、TimeLimitedFileCache.fromDirectory() メソッドで TimeLimitedFileCache インスタンスを取得してください");
@@ -215,16 +296,37 @@ class TimeLimitedFileCache
 	/**
 	 *
 	 * @param {string} fileName
-	 * @return {Promise<Buffer|undefined>}
+	 * @param {boolean} [waitForClose=true]
+	 * @return {Promise<Buffer|null,Error>}
 	 */
-	readAsBuffer(fileName)
+	readAsBuffer(fileName, waitForClose=true)
 	{
-		if(typeof this.#children[fileName] === "undefined")
+		return new Promise((resolve, reject)=>
 		{
-			if(fileName.includes(path.sep)) throw FILE_NAME_DIRECTORY_SEPARATOR_ERROR;
-			this.#children[fileName] = new TimeLimitManager(this, fileName);
-		}
-		return this.#children[fileName].readAsBuffer();
+			const fullPath = path.join(this.directory, fileName);
+			if(typeof entityKeyFromPath[fullPath] !== "undefined")
+			{
+				const key = entityKeyFromPath[fullPath];
+				const result = this.#children[key].readFromMemory();
+				if(result !== null) return resolve(result);
+
+
+			}
+			this.#getTimeLimitManager(fileName, "r").then(({manager, fileHandle})=>
+			{
+				resolve(manager.readAsBuffer(fileHandle, waitForClose));
+			}).catch((error)=>
+			{
+				if(error.code === "ENOENT")
+				{
+					if(logger)
+						logger.log({filePath: this.directory + path.sep + fileName}, logger.NON_EXIST_CACHE);
+
+					resolve(null);
+				}
+				else reject(error);
+			})
+		});
 	}
 
 	/**
@@ -247,16 +349,21 @@ class TimeLimitedFileCache
 	 *
 	 * @param {string} fileName
 	 * @param {Buffer|ArrayBuffer|TypedArray|string} buffer
+	 * @param {boolean} [waitForClose=true]
 	 * @return {Promise<WriteResultKey>} ファイルへの書き込みが成功した際に resolve され、また、ファイルの内容と同一の buffer が渡され更新が必要ない場合も resolve されます。
 	 */
-	writeAsBuffer(fileName, buffer)
+	writeAsBuffer(fileName, buffer, waitForClose=true)
 	{
-		if(typeof this.#children[fileName] === "undefined")
+		return new Promise((resolve, reject)=>
 		{
-			if(fileName.includes(path.sep)) throw FILE_NAME_DIRECTORY_SEPARATOR_ERROR;
-			this.#children[fileName] = new TimeLimitManager(this, fileName);
-		}
-		return this.#children[fileName].writeAsBuffer(buffer);
+			this.#getTimeLimitManager(fileName, "w").then(({manager, fileHandle})=>
+			{
+				resolve(manager.writeAsBuffer(fileHandle, buffer, waitForClose));
+			}).catch((error)=>
+			{
+				reject(error);
+			})
+		});
 	}
 
 	/**
@@ -337,6 +444,9 @@ class TimeLimitManager
 	/** @type {string} */
 	filePath;
 
+	/** @type {string} */
+	entityKey;
+
 	/** @type {Buffer} */
 	#data;
 
@@ -359,13 +469,25 @@ class TimeLimitManager
 	#readPromise;
 
 	/** @type {(value:Buffer) => void} #readPromise の resolve が入ります。writeAsBuffer でメモリが更新されたら強制的に resolve させるためです */
-	#reading;
+	#readingAsBuffer;
 
 	/** @type {(value:WriteResultKey) => void} writeAsBuffer() や writeAsStream() で書込み待機中になった Promise インスタンス用の resolve が入っています */
 	#pendingWrite;
 
 	/**
 	 * @typedef {object} ReadFuncOptions
+	 */
+
+	/**
+	 * @typedef {ReadFuncOptions} ReadBufferFuncOptions
+	 * @property {FileHandle} fileHandle
+	 * @property {boolean} waitForClose
+	 * @property {(value:Buffer)=>void} resolve
+	 * @property {(reason?:any)=>void} reject
+	 */
+
+	/**
+	 * @typedef {ReadFuncOptions} ReadStreamFuncOptions
 	 * @property {number} [maxStreamBufferSize]
 	 * @property {(readStreamAgent:ReadStreamAgent)=>void} streamReadyResolve
 	 * @property {(reasons?:any)=>void} streamInitFailedReject
@@ -374,106 +496,125 @@ class TimeLimitManager
 	/** @type {Array.<{readFunc:(options:ReadFuncOptions)=>any, options:ReadFuncOptions}>} */
 	#readWait = [];
 
+	#onRemove;
+
 	/**
 	 *
 	 * @param {TimeLimitedFileCache} parent
+	 * @param {string} key
 	 * @param {string} fileName
+	 * @param {(manager:TimeLimitManager)=>void} onRemove
 	 */
-	constructor(parent, fileName)
+	constructor(parent, key, fileName, onRemove)
 	{
 		this.parent = parent;
+		this.entityKey = key;
 		this.maxConcurrentReads = parent.maxConcurrentReadsPerFile;
 		this.filePath = path.join(parent.directory, fileName);
+		this.#onRemove = onRemove;
 	}
 
 	/**
 	 *
-	 * @return {Promise<Buffer|Error>}
+	 * @return {Promise<Buffer|null>|Buffer|null}
 	 */
-	readAsBuffer()
+	readFromMemory()
 	{
 		if(this.#data)
 		{
 			this.#updateTimeLimit();
-			return new Promise((resolve) =>
-			{
-				resolve(this.#data);
-
-				if(logger)
-					logger.log(this, logger.READ_FROM_MEMORY_CACHE, logger.outputDataForLog(this.#data));
-			});
+			if(logger)
+				logger.log(this, logger.READ_FROM_MEMORY_CACHE, logger.outputDataForLog(this.#data));
+			return this.#data;
 		}
 		else if(this.#readPromise)
 		{
 			if(logger)
 				logger.log(this, logger.READ_FROM_PROMISE);
+
+			return this.#readPromise;
 		}
-		else
+		else return null;
+	}
+
+	/**
+	 * @param {FileHandle} fileHandle
+	 * @param {boolean} waitForClose
+	 * @return {Promise<Buffer|Error>}
+	 */
+	readAsBuffer(fileHandle, waitForClose)
+	{
+		this.#readPromise = new Promise((resolve, reject) =>
 		{
-			this.#readPromise = new Promise((resolve, reject) =>
+			/** @type {ReadBufferFuncOptions} */
+			const options = {fileHandle, waitForClose, resolve, reject};
+			this.#readingAsBuffer = resolve;
+
+			if(!this.#writing)
 			{
-				this.#reading = resolve;
-
-				if(!this.#writing)
-				{
-					this.#readAsBuffer(resolve, reject);
-				}
-				else
-				{
-					this.#writing.then(()=>
-					{
-						if(this.#reading && this.#reading === resolve)
-						{
-							if(logger)
-								logger.log(this, logger.READ_START_DUE_TO_WRITE_STREAM_COMPLETE);
-
-							this.#readAsBuffer(resolve, reject);
-						}
-						else if(logger)
-							logger.log(this, logger.READ_SKIPPED_DUE_TO_MEMORY_CACHE_UPDATE_AFTER_STREAM_WRITE);
-					});
-
-					if(logger)
-						logger.log(this, logger.READ_QUEUE);
-				}
-			});
-			const onAfterSettle = ()=>
-			{
-				this.#reading = null;
-				if(this.#readWait.length)
-				{
-					const wait = this.#readWait.shift();
-					wait.readFunc(wait.options);
-				}
+				this.#readAsBuffer(options);
 			}
-			this.#readPromise.then(onAfterSettle, onAfterSettle);
+			else
+			{
+				this.#writing.then(()=>
+				{
+					if(this.#readingAsBuffer && this.#readingAsBuffer === resolve)
+					{
+						if(logger)
+							logger.log(this, logger.READ_START_DUE_TO_WRITE_STREAM_COMPLETE);
+
+						this.#readAsBuffer(options);
+					}
+					else if(logger)
+						logger.log(this, logger.READ_SKIPPED_DUE_TO_MEMORY_CACHE_UPDATE_AFTER_STREAM_WRITE);
+				});
+
+				if(logger)
+					logger.log(this, logger.READ_QUEUE);
+			}
+		});
+		const onAfterSettle = ()=>
+		{
+			this.#readingAsBuffer = null;
+			if(this.#readWait.length)
+			{
+				const wait = this.#readWait.shift();
+				wait.readFunc(wait.options);
+			}
 		}
+		this.#readPromise.then(onAfterSettle, onAfterSettle);
 
 		return this.#readPromise;
 	}
 
-	#readAsBuffer(resolve, reject)
+	/**
+	 *
+	 * @param {ReadBufferFuncOptions} options
+	 */
+	#readAsBuffer(options)
 	{
 		const len = this.#readings.length;
 		if(len < this.maxConcurrentReads)
-			this.#readAsBufferFunc({resolve, reject});
+			this.#readAsBufferFunc(options);
 		else
 		{
 			if(logger)
 				logger.log(this, logger.READ_QUEUE_DUE_TO_FILE_READ_LIMIT);
 
-			this.#readWait.push({readFunc: (options)=>this.#readAsBufferFunc(options), options: {resolve, reject}});
+			this.#readWait.push({readFunc: (options)=>this.#readAsBufferFunc(options), options});
 		}
 	}
 
 	/**
 	 *
-	 * @param {ReadFuncOptions} options
+	 * @param {ReadBufferFuncOptions} options
 	 */
 	#readAsBufferFunc(options)
 	{
+		const fileHandle = options.fileHandle;
 		const parentResolve = options.resolve;
 		const parentReject = options.reject;
+		const waitForClose = options.waitForClose;
 		this.#data = null;
 
 		if(logger)
@@ -481,66 +622,77 @@ class TimeLimitManager
 
 		const fileReading = new Promise((resolve) =>
 		{
+			let returnData, returnError;
 			acquireGlobalReadSlot(this).then(()=>
 			{
-				fs.readFile(this.filePath, (error, data) =>
+				fileHandle.readFile().then(data=>
 				{
-					resolve();
-					releaseGlobalReadSlot(this);
-
-					const index = this.#readings.indexOf(fileReading);
-					if(index >= 0) this.#readings.splice(index, 1);
-					else if(logger)
-						logger.log(this, logger.PROMISE_NOT_FOUND_IN_FINALIZE);
-
 					if(!this.#data)
 					{
-						if(error)
-						{
-							if(error.code === "ENOENT")
-							{
-								if(logger)
-									logger.log(this, logger.NON_EXIST_CACHE);
-
-								parentResolve();
-							}
-							else
-							{
-								if(logger)
-									logger.log(this, logger.READ_BUFFER_ERROR, error);
-
-								parentReject(error);
-							}
-						}
-						else
-						{
-							this.#data = data;
-							parentResolve(this.#data);
-							if(logger)
-							{
-								logger.log(this, logger.READ_COMPLETE_FROM_FILE_SYSTEM, logger.outputDataForLog(data));
-								logger.log(this, logger.UPDATED_MEMORY_CACHE_AFTER_READ_FROM_FILE);
-							}
-						}
-					}
-					else if(error)
-					{
-						parentResolve(this.#data);
+						this.#data = data;
 						if(logger)
-							logger.log(this, logger.READ_FROM_MEMORY_CACHE, logger.outputDataForLog(this.#data));
+						{
+							logger.log(this, logger.READ_COMPLETE_FROM_FILE_SYSTEM, logger.outputDataForLog(data));
+							logger.log(this, logger.UPDATED_MEMORY_CACHE_AFTER_READ_FROM_FILE);
+						}
 					}
 					else
 					{
-						parentResolve(this.#data);
 						if(logger)
 						{
 							logger.log(this, logger.READ_COMPLETE_FROM_FILE_SYSTEM, logger.outputDataForLog(data));
 							logger.log(this, logger.READ_COMPLETE_FROM_FILE_SYSTEM_BUT_MEMORY_CACHE_UPDATED, logger.outputDataForLog(this.#data));
 						}
 					}
+					returnData = this.#data;
+
+				}).catch(error=>
+				{
+					if(!this.#data)
+					{
+						if(logger)
+							logger.log(this, logger.READ_BUFFER_ERROR, error);
+
+						returnError = error;
+					}
+					else
+					{
+						returnData = this.#data;
+						if(logger)
+							logger.log(this, logger.READ_FROM_MEMORY_CACHE, logger.outputDataForLog(this.#data));
+					}
+				}).finally(()=>
+				{
+					const index = this.#readings.indexOf(fileReading);
+					if(index >= 0) this.#readings.splice(index, 1);
+					else if(logger)
+						logger.log(this, logger.PROMISE_NOT_FOUND_IN_FINALIZE);
 
 					this.#readPromise = null;
 					this.#updateTimeLimit();
+
+					if(!waitForClose)
+					{
+						if(returnError) parentReject(returnError);
+						else
+						{
+							parentResolve(returnData);
+							releaseGlobalReadSlot(this);
+						}
+					}
+
+					return fileHandle.close();
+				}).then(()=>
+				{
+					if(waitForClose)
+					{
+						if(returnError) parentReject(returnError);
+						else
+						{
+							parentResolve(returnData);
+							releaseGlobalReadSlot(this);
+						}
+					}
 				});
 			});
 		});
@@ -640,11 +792,12 @@ class TimeLimitManager
 	}
 
 	/**
-	 *
+	 * @param {FileHandle} fileHandle
 	 * @param {Buffer|ArrayBuffer|TypedArray|string} buffer
+	 * @param {boolean} waitForClose
 	 * @return {Promise<WriteResultKey|Error>}
 	 */
-	writeAsBuffer(buffer)
+	writeAsBuffer(fileHandle, buffer, waitForClose)
 	{
 		return new Promise((resolve, reject)=>
 		{
@@ -675,7 +828,7 @@ class TimeLimitManager
 
 				if(!this.#readings.length && !this.#writing)
 				{
-					this.#writeAsBuffer(buf, resolve, reject);
+					this.#writeAsBuffer(fileHandle, buf, resolve, reject, waitForClose);
 				}
 				else if(this.#readings.length)
 				{
@@ -689,7 +842,7 @@ class TimeLimitManager
 							if(logger)
 								logger.log(this, logger.WRITE_START_FROM_QUEUE_AFTER_READ, logger.outputDataForLog(buf));
 
-							this.#writeAsBuffer(buf, resolve, reject);
+							this.#writeAsBuffer(fileHandle, buf, resolve, reject, waitForClose);
 						}
 					});
 				}
@@ -705,7 +858,7 @@ class TimeLimitManager
 							if(logger)
 								logger.log(this, logger.WRITE_START_FROM_QUEUE_AFTER_WRITE);
 
-							this.#writeAsBuffer(buf, resolve, reject);
+							this.#writeAsBuffer(fileHandle, buf, resolve, reject, waitForClose);
 						}
 					});
 				}
@@ -714,12 +867,12 @@ class TimeLimitManager
 				if(logger)
 					logger.log(this, logger.UPDATED_MEMORY_CACHE, logger.outputDataForLog(buf));
 
-				if(this.#reading)
+				if(this.#readingAsBuffer)
 				{
 					if(logger)
 						logger.log(this, logger.RESOLVE_READ_QUEUE);
 
-					this.#reading(buf);
+					this.#readingAsBuffer(buf);
 				}
 			}
 		});
@@ -727,12 +880,13 @@ class TimeLimitManager
 	}
 
 	/**
-	 *
+	 * @param {FileHandle} fileHandle
 	 * @param {Buffer|string} buffer
 	 * @param {(result:typeof TimeLimitedFileCache.WRITE_RESULT.COMPLETED_SUCCESSFULLY)=>void} parentResolve
 	 * @param {(reasons?:Error)=>void} parentReject
+	 * @param {boolean} waitForClose
 	 */
-	#writeAsBuffer(buffer, parentResolve, parentReject)
+	#writeAsBuffer(fileHandle, buffer, parentResolve, parentReject, waitForClose)
 	{
 		this.#pendingWrite = null;
 
@@ -741,27 +895,30 @@ class TimeLimitManager
 			if(logger)
 				logger.log(this, logger.WRITE_START);
 
-			fs.writeFile(this.filePath, buffer, (error) =>
+			fileHandle.writeFile(buffer).then(()=>
 			{
-				resolve();
+				parentResolve(TimeLimitedFileCache.WRITE_RESULT.COMPLETED_SUCCESSFULLY);
+
+				if(logger)
+					logger.log(this, logger.WRITE_COMPLETE_TO_FILE_SYSTEM);
+
+			}).catch(error=>
+			{
+				if(logger)
+					logger.log(this, logger.WRITE_BUFFER_ERROR, error);
+
+				parentReject(error);
+
+			}).finally(()=>
+			{
 				this.#writing = null;
-
-				if(error)
-				{
-					if(logger)
-						logger.log(this, logger.WRITE_BUFFER_ERROR, error);
-
-					parentReject(error);
-				}
-				else
-				{
-					parentResolve(TimeLimitedFileCache.WRITE_RESULT.COMPLETED_SUCCESSFULLY);
-
-					if(logger)
-						logger.log(this, logger.WRITE_COMPLETE_TO_FILE_SYSTEM);
-				}
-
 				this.#updateTimeLimit();
+
+				if(!waitForClose) resolve();
+				return fileHandle.close();
+			}).then(()=>
+			{
+				if(waitForClose) resolve();
 			});
 		});
 	}
@@ -948,6 +1105,16 @@ class TimeLimitManager
 				else if(logger)
 					logger.log(target, logger.REMOVE_CACHE_FILE);
 			});
+
+			const entityKey = target.entityKey;
+			const paths = pathsFromEntityKey[entityKey];
+			paths.forEach(path =>
+			{
+				delete entityKeyFromPath[path];
+				paths.delete(path);
+			});
+
+			target.#onRemove(target);
 		}
 	}
 }
