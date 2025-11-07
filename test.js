@@ -1,6 +1,6 @@
 const TimeLimitedFileCache = require('./index');
 const path = require("node:path");
-/** @type {typeof Log} */
+/** @type {typeof Logger} */
 const logger = require("./log");
 
 const dirName = path.join("r:", 'downloads');
@@ -70,27 +70,27 @@ const estimateWriteCompleteSuccessfully = (result)=>
 {
 	estimateLog.push("then の引数に TimeLimitedFileCache.WRITE_RESULT.COMPLETED_SUCCESSFULLY が入っていました");
 	if(result === TimeLimitedFileCache.WRITE_RESULT.COMPLETED_SUCCESSFULLY)
-		fileCache.log.push("then の引数に TimeLimitedFileCache.WRITE_RESULT.COMPLETED_SUCCESSFULLY が入っていました");
+		TimeLimitedFileCache.log.push("then の引数に TimeLimitedFileCache.WRITE_RESULT.COMPLETED_SUCCESSFULLY が入っていました");
 	else
-		fileCache.log.push("then の引数に TimeLimitedFileCache.WRITE_RESULT.COMPLETED_SUCCESSFULLY が入っていませんでした");
+		TimeLimitedFileCache.log.push("then の引数に TimeLimitedFileCache.WRITE_RESULT.COMPLETED_SUCCESSFULLY が入っていませんでした");
 }
 
 const estimateWriteCanceledByNewerRequest = result =>
 {
 	estimateLog.push("then の引数に TimeLimitedFileCache.WRITE_RESULT.CANCELED_BY_NEWER_REQUEST が入っていました");
 	if(result === TimeLimitedFileCache.WRITE_RESULT.CANCELED_BY_NEWER_REQUEST)
-		fileCache.log.push("then の引数に TimeLimitedFileCache.WRITE_RESULT.CANCELED_BY_NEWER_REQUEST が入っていました");
+		TimeLimitedFileCache.log.push("then の引数に TimeLimitedFileCache.WRITE_RESULT.CANCELED_BY_NEWER_REQUEST が入っていました");
 	else
-		fileCache.log.push("then の引数に TimeLimitedFileCache.WRITE_RESULT.CANCELED_BY_NEWER_REQUEST が入っていませんでした");
+		TimeLimitedFileCache.log.push("then の引数に TimeLimitedFileCache.WRITE_RESULT.CANCELED_BY_NEWER_REQUEST が入っていませんでした");
 }
 
 const estimateWriteSkippedSameAsMemoryCache = result =>
 {
 	estimateLog.push("then の引数に TimeLimitedFileCache.WRITE_RESULT.SKIPPED_SAME_AS_MEMORY_CACHE が入っていました");
 	if(result === TimeLimitedFileCache.WRITE_RESULT.SKIPPED_SAME_AS_MEMORY_CACHE)
-		fileCache.log.push("then の引数に TimeLimitedFileCache.WRITE_RESULT.SKIPPED_SAME_AS_MEMORY_CACHE が入っていました");
+		TimeLimitedFileCache.log.push("then の引数に TimeLimitedFileCache.WRITE_RESULT.SKIPPED_SAME_AS_MEMORY_CACHE が入っていました");
 	else
-		fileCache.log.push("then の引数に TimeLimitedFileCache.WRITE_RESULT.SKIPPED_SAME_AS_MEMORY_CACHE が入っていませんでした");
+		TimeLimitedFileCache.log.push("then の引数に TimeLimitedFileCache.WRITE_RESULT.SKIPPED_SAME_AS_MEMORY_CACHE が入っていませんでした");
 }
 
 const waitFileRemoved = ()=>
@@ -103,13 +103,13 @@ const waitFileRemoved = ()=>
 
 const compareLog = ()=>
 {
-	const length = estimateLog.length >= fileCache.log.length ? estimateLog.length : fileCache.log.length;
+	const length = estimateLog.length >= TimeLimitedFileCache.log.length ? estimateLog.length : TimeLimitedFileCache.log.length;
 	let errorCount = 0;
 	for(let i=0; i<length; i++)
 	{
-		if(estimateLog[i] !== fileCache.log[i])
+		if(estimateLog[i] !== TimeLimitedFileCache.log[i])
 		{
-			console.log(i, ":\n予想のログ : ", estimateLog[i], "\n実際のログ : ", fileCache.log[i], "\n", fileCache.stacks[i]);
+			console.log(i, ":\n予想のログ : ", estimateLog[i], "\n実際のログ : ", TimeLimitedFileCache.log[i], "\n", fileCache.stacks[i]);
 			errorCount++;
 		}
 	}
@@ -117,7 +117,7 @@ const compareLog = ()=>
 	const a = errorCount ? "*!*" : "***";
 	console[errorCount ? "error" : "log"](`${a} ログチェック後のエラー数：${errorCount} ${a} ${logger.getStack()}`);
 	estimateLog.length = 0;
-	fileCache.log.length = 0;
+	TimeLimitedFileCache.log.length = 0;
 }
 
 TimeLimitedFileCache.fromDirectory(dirName, false, memoryTTL, fileTTL).then(timeLimitedFileCache=>
@@ -143,7 +143,7 @@ TimeLimitedFileCache.fromDirectory(dirName, false, memoryTTL, fileTTL).then(time
 }).then(data=>
 {
 	estimateLog.push("受け取ったデータ : " + str);
-	fileCache.log.push("受け取ったデータ : " + logger.outputDataForLog(data));
+	TimeLimitedFileCache.log.push("受け取ったデータ : " + logger.outputDataForLog(data));
 	compareLog();
 
 	console.log("=== file write -> memory read テスト ====");
@@ -157,7 +157,7 @@ TimeLimitedFileCache.fromDirectory(dirName, false, memoryTTL, fileTTL).then(time
 		estimateLog.push(filePath + " : " + logger.READ_FROM_MEMORY_CACHE + " " + str);
 		compareLog();
 		estimateLog.push("受け取ったデータ : " + str);
-		fileCache.log.push("受け取ったデータ : " + logger.outputDataForLog(data));
+		TimeLimitedFileCache.log.push("受け取ったデータ : " + logger.outputDataForLog(data));
 		compareLog();
 	});
 
@@ -172,7 +172,7 @@ TimeLimitedFileCache.fromDirectory(dirName, false, memoryTTL, fileTTL).then(time
 	fileCache.readAsBuffer(fileName).then(data=>
 	{
 		estimateLog.push("受け取ったデータ : " + (+str - 1) + "");
-		fileCache.log.push("受け取ったデータ : " + logger.outputDataForLog(data));
+		TimeLimitedFileCache.log.push("受け取ったデータ : " + logger.outputDataForLog(data));
 		compareLog();
 	});
 	estimateLog.push(filePath + " : " + logger.READ_FROM_MEMORY_CACHE + " " + str);
@@ -194,7 +194,7 @@ TimeLimitedFileCache.fromDirectory(dirName, false, memoryTTL, fileTTL).then(time
 	fileCache.readAsBuffer(fileName).then(data=>
 	{
 		estimateLog.push("受け取ったデータ : " + str);
-		fileCache.log.push("受け取ったデータ : " + logger.outputDataForLog(data));
+		TimeLimitedFileCache.log.push("受け取ったデータ : " + logger.outputDataForLog(data));
 		compareLog();
 	});
 	estimateLog.push(filePath + " : " + logger.READ_FROM_MEMORY_CACHE + " " + str);
@@ -207,7 +207,7 @@ TimeLimitedFileCache.fromDirectory(dirName, false, memoryTTL, fileTTL).then(time
 }).then(data=>
 {
 	estimateLog.push("受け取ったデータ : " + str);
-	fileCache.log.push("受け取ったデータ : " + logger.outputDataForLog(data));
+	TimeLimitedFileCache.log.push("受け取ったデータ : " + logger.outputDataForLog(data));
 	compareLog();
 
 	console.log("=== file write -> file write テスト ====");
@@ -259,7 +259,7 @@ TimeLimitedFileCache.fromDirectory(dirName, false, memoryTTL, fileTTL).then(time
 	fileCache.readAsBuffer(fileName).then(data=>
 	{
 		estimateLog.push("受け取ったデータ : " + str);
-		fileCache.log.push("受け取ったデータ : " + logger.outputDataForLog(data));
+		TimeLimitedFileCache.log.push("受け取ったデータ : " + logger.outputDataForLog(data));
 		compareLog();
 	});
 	estimateLog.push(filePath + " : " + logger.READ_FROM_MEMORY_CACHE + " " + str);
@@ -332,7 +332,7 @@ TimeLimitedFileCache.fromDirectory(dirName, false, memoryTTL, fileTTL).then(time
 	compareLog();
 
 	estimateLog.push("受け取ったデータ : " + str);
-	fileCache.log.push("受け取ったデータ : " + logger.outputDataForLog(data));
+	TimeLimitedFileCache.log.push("受け取ったデータ : " + logger.outputDataForLog(data));
 	compareLog();
 
 	return waitMemoryRemoved();
@@ -350,7 +350,7 @@ TimeLimitedFileCache.fromDirectory(dirName, false, memoryTTL, fileTTL).then(time
 		// writeAsBuffer 直後に readAsBuffer の Promise は解決されているので、
 		// このタイミングで logger 定数メッセージのログは出ないはず
 		estimateLog.push("受け取ったデータ：" + str);
-		fileCache.log.push("受け取ったデータ：" + logger.outputDataForLog(data));
+		TimeLimitedFileCache.log.push("受け取ったデータ：" + logger.outputDataForLog(data));
 		compareLog();
 	});
 	estimateLog.push(filePath + " : " + logger.READ_START_FROM_FILE_SYSTEM);
@@ -389,7 +389,7 @@ TimeLimitedFileCache.fromDirectory(dirName, false, memoryTTL, fileTTL).then(time
 		estimateLog.push(filePath + " : " + logger.UPDATED_MEMORY_CACHE_AFTER_READ_FROM_FILE);
 
 		estimateLog.push("受け取ったデータ : " + str);
-		fileCache.log.push("受け取ったデータ : " + logger.outputDataForLog(data));
+		TimeLimitedFileCache.log.push("受け取ったデータ : " + logger.outputDataForLog(data));
 		compareLog();
 	});
 	estimateLog.push(filePath + " : " + logger.READ_START_FROM_FILE_SYSTEM);
@@ -405,7 +405,7 @@ TimeLimitedFileCache.fromDirectory(dirName, false, memoryTTL, fileTTL).then(time
 {
 	console.log("read B 完了後の Promise.resolve, read A 完了後の Promise.resolve のログも出力されなければならない。read A も read B も同じ Promise インスタンスからの resolve なので、必ず同一データが引数から出力されるはず", data);
 	estimateLog.push("受け取ったデータ : " + str);
-	fileCache.log.push("受け取ったデータ : " + logger.outputDataForLog(data));
+	TimeLimitedFileCache.log.push("受け取ったデータ : " + logger.outputDataForLog(data));
 	compareLog();
 
 	return waitMemoryRemoved();
@@ -423,7 +423,7 @@ TimeLimitedFileCache.fromDirectory(dirName, false, memoryTTL, fileTTL).then(time
 		// estimateLog.push(filePath + " : " + logger.UPDATED_MEMORY_CACHE_AFTER_READ_FROM_FILE);
 
 		estimateLog.push("受け取ったデータ : " + str);
-		fileCache.log.push("受け取ったデータ : " + logger.outputDataForLog(data));
+		TimeLimitedFileCache.log.push("受け取ったデータ : " + logger.outputDataForLog(data));
 		compareLog();
 	});
 	estimateLog.push(filePath + " : " + logger.READ_START_FROM_FILE_SYSTEM);
@@ -434,7 +434,7 @@ TimeLimitedFileCache.fromDirectory(dirName, false, memoryTTL, fileTTL).then(time
 	{
 		console.log("read B 完了後の Promise.resolve, read A 完了後の Promise.resolve のログも出力されなければならない。read A も read B も同じ Promise インスタンスからの resolve なので、必ず同一データが引数から出力されるはず", data);
 		estimateLog.push("受け取ったデータ : " + str);
-		fileCache.log.push("受け取ったデータ : " + logger.outputDataForLog(data));
+		TimeLimitedFileCache.log.push("受け取ったデータ : " + logger.outputDataForLog(data));
 		compareLog();
 	});
 	estimateLog.push(filePath + " : " + logger.READ_FROM_PROMISE);
@@ -471,7 +471,7 @@ TimeLimitedFileCache.fromDirectory(dirName, false, memoryTTL, fileTTL).then(time
 		console.log("read A 完了後の Promise.resolve, read B 完了後の Promise.resolve のログも出力されなければならない。read A はファイルシステムからの読み取り完了後なので read B より後に出力されるが、read B と同じ値が取得されるはず", logger.outputDataForLog(data));
 
 		estimateLog.push("受け取ったデータ : " + str);
-		fileCache.log.push("受け取ったデータ : " + logger.outputDataForLog(data));
+		TimeLimitedFileCache.log.push("受け取ったデータ : " + logger.outputDataForLog(data));
 		compareLog();
 	});
 	estimateLog.push(filePath + " : " + logger.READ_START_FROM_FILE_SYSTEM);
@@ -490,7 +490,7 @@ TimeLimitedFileCache.fromDirectory(dirName, false, memoryTTL, fileTTL).then(time
 	{
 		console.log("read B 完了後の Promise.resolve, read A 完了後の Promise.resolve のログも出力されなければならない。read B はメモリキャッシュからの読み取りなので read A よりも先に表示されるが、取得される値は同じはず", logger.outputDataForLog(data));
 		estimateLog.push("受け取ったデータ : " + str);
-		fileCache.log.push("受け取ったデータ : " + logger.outputDataForLog(data));
+		TimeLimitedFileCache.log.push("受け取ったデータ : " + logger.outputDataForLog(data));
 		compareLog();
 	});
 	estimateLog.push(filePath + " : " + logger.READ_FROM_MEMORY_CACHE + " " + str);
@@ -527,7 +527,7 @@ TimeLimitedFileCache.fromDirectory(dirName, false, memoryTTL, fileTTL).then(time
 	compareLog();
 
 	estimateLog.push("受け取ったデータ : " + undefined);
-	fileCache.log.push("受け取ったデータ : " + data);
+	TimeLimitedFileCache.log.push("受け取ったデータ : " + data);
 	compareLog();
 
 	console.log("=== キャッシュファイル無. file write -> memory read テスト ====");
@@ -540,7 +540,7 @@ TimeLimitedFileCache.fromDirectory(dirName, false, memoryTTL, fileTTL).then(time
 	fileCache.readAsBuffer(fileName).then(data=>
 	{
 		estimateLog.push("受け取ったデータ : " + str);
-		fileCache.log.push("受け取ったデータ : " + logger.outputDataForLog(data));
+		TimeLimitedFileCache.log.push("受け取ったデータ : " + logger.outputDataForLog(data));
 		compareLog();
 	});
 	estimateLog.push(filePath + " : " + logger.READ_FROM_MEMORY_CACHE + " " + str);
@@ -605,7 +605,7 @@ TimeLimitedFileCache.fromDirectory(dirName, false, memoryTTL, fileTTL).then(time
 		compareLog();
 
 		estimateLog.push("受け取ったデータ : " + undefined);
-		fileCache.log.push("受け取ったデータ : " + data);
+		TimeLimitedFileCache.log.push("受け取ったデータ : " + data);
 		compareLog();
 	});
 	estimateLog.push(filePath + " : " + logger.READ_START_FROM_FILE_SYSTEM);
@@ -619,7 +619,7 @@ TimeLimitedFileCache.fromDirectory(dirName, false, memoryTTL, fileTTL).then(time
 {
 	console.log("  === read B の完了 ====");
 	estimateLog.push("受け取ったデータ : " + undefined);
-	fileCache.log.push("受け取ったデータ : " + data);
+	TimeLimitedFileCache.log.push("受け取ったデータ : " + data);
 	compareLog();
 
 	console.log("=== キャッシュファイル無. file write -> file write テスト ====");
@@ -810,7 +810,7 @@ TimeLimitedFileCache.fromDirectory(dirName, false, memoryTTL, fileTTL).then(time
 	readStreamAgent.once("data", data=>
 	{
 		estimateLog.push(filePath + " : " + logger.READ_STREAM_CHUNK_READ);
-		fileCache.log.push("バイナリ : " + checkBinary(data));
+		TimeLimitedFileCache.log.push("バイナリ : " + checkBinary(data));
 		estimateLog.push("バイナリ : " + checkBinary(data16383A));
 		compareLog();
 	});
@@ -834,7 +834,7 @@ TimeLimitedFileCache.fromDirectory(dirName, false, memoryTTL, fileTTL).then(time
 		readStreamAgent.once("data", data =>
 		{
 			estimateLog.push(filePath + " : " + logger.READ_STREAM_CHUNK_READ);
-			fileCache.log.push("バイナリ : " + checkBinary(data));
+			TimeLimitedFileCache.log.push("バイナリ : " + checkBinary(data));
 			estimateLog.push("バイナリ : " + checkBinary(data16383A));
 			compareLog();
 		});
@@ -903,14 +903,14 @@ TimeLimitedFileCache.fromDirectory(dirName, false, memoryTTL, fileTTL).then(time
 	readStreamAgent.once("data", data =>
 	{
 		estimateLog.push(filePath + " : " + logger.READ_STREAM_CHUNK_READ);
-		fileCache.log.push("バイナリ : " + checkBinary(data));
+		TimeLimitedFileCache.log.push("バイナリ : " + checkBinary(data));
 		estimateLog.push("バイナリ : " + checkBinary(data16383A));
 		compareLog();
 
 		readStreamAgent.once("data", data =>
 		{
 			estimateLog.push(filePath + " : " + logger.READ_STREAM_CHUNK_READ);
-			fileCache.log.push("バイナリ : " + checkBinary(data));
+			TimeLimitedFileCache.log.push("バイナリ : " + checkBinary(data));
 			estimateLog.push("バイナリ : " + checkBinary(data1A));
 			compareLog();
 		})
@@ -934,7 +934,7 @@ TimeLimitedFileCache.fromDirectory(dirName, false, memoryTTL, fileTTL).then(time
 	readStreamAgent.once("data", data =>
 	{
 		estimateLog.push(filePath + " : " + logger.READ_STREAM_CHUNK_READ);
-		fileCache.log.push("バイナリ : " + checkBinary(data));
+		TimeLimitedFileCache.log.push("バイナリ : " + checkBinary(data));
 		estimateLog.push("バイナリ : " + checkBinary(data16384A));
 		compareLog();
 	});
@@ -955,14 +955,14 @@ TimeLimitedFileCache.fromDirectory(dirName, false, memoryTTL, fileTTL).then(time
 	{
 		estimateLog.push(filePath + " : " + logger.READ_STREAM_CLOSED);
 		estimateLog.push(filePath + " : " + logger.READ_STREAM_CHUNK_READ);
-		fileCache.log.push("バイナリ : " + checkBinary(data));
+		TimeLimitedFileCache.log.push("バイナリ : " + checkBinary(data));
 		estimateLog.push("バイナリ : " + checkBinary(data16383A));
 		compareLog();
 
 		readStreamAgent.once("data", data =>
 		{
 			estimateLog.push(filePath + " : " + logger.READ_STREAM_CHUNK_READ);
-			fileCache.log.push("バイナリ : " + checkBinary(data));
+			TimeLimitedFileCache.log.push("バイナリ : " + checkBinary(data));
 			estimateLog.push("バイナリ : " + checkBinary(data1A));
 			compareLog();
 		});
@@ -989,14 +989,14 @@ TimeLimitedFileCache.fromDirectory(dirName, false, memoryTTL, fileTTL).then(time
 		readStreamAgent.once("data", data =>
 		{
 			estimateLog.push(filePath + " : " + logger.READ_STREAM_CHUNK_READ);
-			fileCache.log.push("バイナリ : " + checkBinary(data));
+			TimeLimitedFileCache.log.push("バイナリ : " + checkBinary(data));
 			estimateLog.push("バイナリ : " + checkBinary(data16383A));
 			compareLog();
 
 			readStreamAgent.once("data", data =>
 			{
 				estimateLog.push(filePath + " : " + logger.READ_STREAM_CHUNK_READ);
-				fileCache.log.push("バイナリ : " + checkBinary(data));
+				TimeLimitedFileCache.log.push("バイナリ : " + checkBinary(data));
 				estimateLog.push("バイナリ : " + checkBinary(data1A));
 				compareLog();
 			});
@@ -1021,7 +1021,7 @@ TimeLimitedFileCache.fromDirectory(dirName, false, memoryTTL, fileTTL).then(time
 	readStreamAgent.once("data", data =>
 	{
 		estimateLog.push(filePath + " : " + logger.READ_STREAM_CHUNK_READ);
-		fileCache.log.push("バイナリ : " + checkBinary(data));
+		TimeLimitedFileCache.log.push("バイナリ : " + checkBinary(data));
 		estimateLog.push("バイナリ : " + checkBinary(data16384A));
 		compareLog();
 	});
@@ -1075,14 +1075,14 @@ TimeLimitedFileCache.fromDirectory(dirName, false, memoryTTL, fileTTL).then(time
 	{
 		estimateLog.push(filePath + " : " + logger.WRITE_STREAM_CLOSED);
 		estimateLog.push(filePath + " : " + logger.READ_STREAM_CHUNK_READ);
-		fileCache.log.push("バイナリ : " + checkBinary(data));
+		TimeLimitedFileCache.log.push("バイナリ : " + checkBinary(data));
 		estimateLog.push("バイナリ : " + checkBinary(data16383A));
 		compareLog();
 
 		readStreamAgent.once("data", data =>
 		{
 			estimateLog.push(filePath + " : " + logger.READ_STREAM_CHUNK_READ);
-			fileCache.log.push("バイナリ : " + checkBinary(data));
+			TimeLimitedFileCache.log.push("バイナリ : " + checkBinary(data));
 			estimateLog.push("バイナリ : " + checkBinary(data1A));
 			compareLog();
 		})
@@ -1269,14 +1269,14 @@ TimeLimitedFileCache.fromDirectory(dirName, false, memoryTTL, fileTTL).then(time
 		{
 			estimateLog.push(filePath + " : " + logger.WRITE_STREAM_CLOSED);
 			estimateLog.push(filePath + " : " + logger.READ_STREAM_CHUNK_READ);
-			fileCache.log.push("バイナリ : " + checkBinary(data));
+			TimeLimitedFileCache.log.push("バイナリ : " + checkBinary(data));
 			estimateLog.push("バイナリ : " + checkBinary(data16383A));
 			compareLog();
 
 			readStreamAgent.once("data", data =>
 			{
 				estimateLog.push(filePath + " : " + logger.READ_STREAM_CHUNK_READ);
-				fileCache.log.push("バイナリ : " + checkBinary(data));
+				TimeLimitedFileCache.log.push("バイナリ : " + checkBinary(data));
 				estimateLog.push("バイナリ : " + checkBinary(data16383A));
 				compareLog();
 			});
@@ -1363,14 +1363,14 @@ TimeLimitedFileCache.fromDirectory(dirName, false, memoryTTL, fileTTL).then(time
 	{
 		estimateLog.push(filePath + " : " + logger.WRITE_STREAM_CLOSED);
 		estimateLog.push(filePath + " : " + logger.READ_STREAM_CHUNK_READ);
-		fileCache.log.push("バイナリ : " + checkBinary(data));
+		TimeLimitedFileCache.log.push("バイナリ : " + checkBinary(data));
 		estimateLog.push("バイナリ : " + checkBinary(data16383A));
 		compareLog();
 
 		readStreamAgent.once("data", data =>
 		{
 			estimateLog.push(filePath + " : " + logger.READ_STREAM_CHUNK_READ);
-			fileCache.log.push("バイナリ : " + checkBinary(data));
+			TimeLimitedFileCache.log.push("バイナリ : " + checkBinary(data));
 			estimateLog.push("バイナリ : " + checkBinary(data16383A));
 			compareLog();
 		});
@@ -1437,7 +1437,7 @@ TimeLimitedFileCache.fromDirectory(dirName, false, memoryTTL, fileTTL).then(time
 	readStreamAgent.once("data", data=>
 	{
 		estimateLog.push(filePath + " : " + logger.READ_STREAM_CHUNK_READ);
-		fileCache.log.push("バイナリ : " + checkBinary(data));
+		TimeLimitedFileCache.log.push("バイナリ : " + checkBinary(data));
 		estimateLog.push("バイナリ : " + checkBinary(data16383A));
 		compareLog();
 	});
@@ -1458,7 +1458,7 @@ TimeLimitedFileCache.fromDirectory(dirName, false, memoryTTL, fileTTL).then(time
 		readStreamAgent.once("data", data =>
 		{
 			estimateLog.push(filePath + " : " + logger.READ_STREAM_CHUNK_READ);
-			fileCache.log.push("バイナリ : " + checkBinary(data));
+			TimeLimitedFileCache.log.push("バイナリ : " + checkBinary(data));
 			estimateLog.push("バイナリ : " + checkBinary(data16383A));
 			compareLog();
 		});
@@ -1509,7 +1509,7 @@ TimeLimitedFileCache.fromDirectory(dirName, false, memoryTTL, fileTTL).then(time
 		readStreamAgent.once("data", data =>
 		{
 			estimateLog.push(filePath + " : " + logger.READ_STREAM_CHUNK_READ);
-			fileCache.log.push("バイナリ : " + checkBinary(data));
+			TimeLimitedFileCache.log.push("バイナリ : " + checkBinary(data));
 			estimateLog.push("バイナリ : " + checkBinary(data16383A));
 			compareLog();
 		});
@@ -1734,7 +1734,7 @@ TimeLimitedFileCache.fromDirectory(dirName, false, memoryTTL, fileTTL).then(time
 		estimateLog.push(filePath + " : " + logger.READ_FROM_MEMORY_CACHE + " " + str);
 		estimateLog.push(filePath + " : " + logger.READ_FROM_MEMORY_CACHE + " " + str);
 		estimateLog.push("受け取ったデータ : " + str);
-		fileCache.log.push("受け取ったデータ : " + logger.outputDataForLog(data));
+		TimeLimitedFileCache.log.push("受け取ったデータ : " + logger.outputDataForLog(data));
 		compareLog();
 	});
 
@@ -1744,7 +1744,7 @@ TimeLimitedFileCache.fromDirectory(dirName, false, memoryTTL, fileTTL).then(time
 	{
 		estimateLog.push(filePath + " : " + logger.READ_STREAM_READY);
 		estimateLog.push("受け取ったデータ : " + str);
-		fileCache.log.push("受け取ったデータ : " + logger.outputDataForLog(data));
+		TimeLimitedFileCache.log.push("受け取ったデータ : " + logger.outputDataForLog(data));
 		compareLog();
 	});
 
@@ -1755,7 +1755,7 @@ TimeLimitedFileCache.fromDirectory(dirName, false, memoryTTL, fileTTL).then(time
 	readStreamAgent.once("data", data =>
 	{
 		estimateLog.push(filePath + " : " + logger.READ_STREAM_CHUNK_READ);
-		fileCache.log.push("バイナリ : " + logger.outputDataForLog(data));
+		TimeLimitedFileCache.log.push("バイナリ : " + logger.outputDataForLog(data));
 		estimateLog.push("バイナリ : " + str);
 		compareLog();
 	});
@@ -1825,7 +1825,7 @@ TimeLimitedFileCache.fromDirectory(dirName, false, memoryTTL, fileTTL).then(time
 		readStreamAgent.once("data", data =>
 		{
 			estimateLog.push(filePath + " : " + logger.READ_STREAM_CHUNK_READ);
-			fileCache.log.push("バイナリ : " + logger.outputDataForLog(data));
+			TimeLimitedFileCache.log.push("バイナリ : " + logger.outputDataForLog(data));
 			estimateLog.push("バイナリ : " + str);
 			compareLog();
 		});
@@ -1851,7 +1851,7 @@ TimeLimitedFileCache.fromDirectory(dirName, false, memoryTTL, fileTTL).then(time
 			readStreamAgent.once("data", data =>
 			{
 				estimateLog.push(filePath + " : " + logger.READ_STREAM_CHUNK_READ);
-				fileCache.log.push("バイナリ : " + logger.outputDataForLog(data));
+				TimeLimitedFileCache.log.push("バイナリ : " + logger.outputDataForLog(data));
 				estimateLog.push("バイナリ : " + str);
 				compareLog();
 			});
@@ -1869,7 +1869,7 @@ TimeLimitedFileCache.fromDirectory(dirName, false, memoryTTL, fileTTL).then(time
 	readStreamAgent.once("data", data =>
 	{
 		estimateLog.push(filePath + " : " + logger.READ_STREAM_CHUNK_READ);
-		fileCache.log.push("バイナリ : " + logger.outputDataForLog(data));
+		TimeLimitedFileCache.log.push("バイナリ : " + logger.outputDataForLog(data));
 		estimateLog.push("バイナリ : " + str);
 		compareLog();
 	});
@@ -1904,7 +1904,7 @@ TimeLimitedFileCache.fromDirectory(dirName, false, memoryTTL, fileTTL).then(time
 	console.log("エラーカウント:", count);
 }).catch(result =>
 {
-	console.log("!!!!", result);
+	console.error("!!!!", result);
 });
 // compareLog();
 

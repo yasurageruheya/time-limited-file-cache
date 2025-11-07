@@ -6,17 +6,22 @@ const {EventEmitter} = require('events');
 const entityKeyFromPath = {};
 /** @type {Object.<Set<string>>} */
 const pathsFromEntityKey = {};
+/** @type {Object.<TimeLimitedEntity>} */
+const managerFromFullPath = {};
+/** @type {Object.<TimeLimitedEntity>} */
+const managerFromEntityKey = {};
 
 /** @type {Set<string>} */
-const checked = new Set();
+const checkedFileName = new Set();
+
+/** @type {Set<string>} */
+const checkedDirectoryPath = new Set();
 
 /** @type {Object.<TimeLimitedFileCache>} */
-const caches = {};
+const cacheFromEntityKey = {};
 
-/** @type {typeof Log} */
-let logger;
-
-let decoder;
+/** @type {typeof Logger} */
+let Logger;
 
 
 const globalReadWait = [];
@@ -56,7 +61,7 @@ class TimeLimitedFileCache
 	static maxConcurrentReadsPerFile = 4;
 
 	/**
-	 * 書き込みストリームによる処理の時に、ストリームが正しく閉じられなかった場合などに、強制的に次の読み取り／書き込みに処理が渡す際の待機ミリ秒数。
+	 * 書き込みストリームによる処理でストリームが正しく閉じられなかった場合などに、強制的に次の読み取り／書き込みへ処理を渡す際の待機ミリ秒数。
 	 * @type {number}
 	 * @default 3000
 	 * @example
@@ -99,19 +104,36 @@ class TimeLimitedFileCache
 	 */
 	static fromDirectory(directory, create=false, memoryTTL=10_000, fileTTL=600_000)
 	{
-		if(typeof caches[directory] === "undefined")
+		if(!checkedDirectoryPath.has(directory))
 		{
-			TimeLimitedFileCache.#enableConstruction = true;
-			caches[directory] = new TimeLimitedFileCache(directory);
-			TimeLimitedFileCache.#enableConstruction = false;
+			if(!path.isAbsolute(directory))
+				throw new Error("TimeLimitedFileCache.fromDirectory() に指定するディレクトリパスは絶対パスで指定してください");
+
+			checkedDirectoryPath.add(directory);
 		}
 
-		const cache = caches[directory];
+		/** @type {CacheDirectory} */
+		let directoryInstance;
+		if(typeof CacheDirectory.directoryFromFullPath[directory] !== "undefined")
+			directoryInstance = CacheDirectory.directoryFromFullPath[directory];
+
+
+		if(!path.isAbsolute(directory))
+			throw new Error("TimeLimitedFileCache.fromDirectory() に指定するディレクトリパスは絶対パスで指定してください");
+
+		let cache;
+		if(typeof entityKeyFromPath[directory] === "undefined")
+		{
+			TimeLimitedFileCache.#enableConstruction = true;
+			cache = new TimeLimitedFileCache();//todo 既に別なパスに同じ実体がいないか何処かでチェックしなきゃ
+			TimeLimitedFileCache.#enableConstruction = false;
+		}
+		else cache = cacheFromEntityKey[entityKeyFromPath[directory]];
 
 		cache.memoryTTL = memoryTTL;
 		cache.fileTTL = fileTTL;
 
-		return caches[directory].#initialize(create)
+		return cache.#initialize(directory, create);
 	}
 
 	/** @type {number} */
@@ -122,73 +144,56 @@ class TimeLimitedFileCache
 
 	maxConcurrentReadsPerFile = TimeLimitedFileCache.maxConcurrentReadsPerFile;
 
-	set debug(bool)
+	static set debug(bool)
 	{
 		if(bool)
 		{
-			logger = require("./log");
-			decoder = new TextDecoder();
+			Logger = require("./log");
+			Logger.TimeLimitedFileCache = TimeLimitedFileCache;
 			this.log = [];
 			this.stacks = [];
 		}
 		else
 		{
-			logger = null;
+			Logger = null;
 		}
 	}
 
 	/** @type {string[]} debug プロパティが true の時、直前の処理のログメッセージが入ります */
-	log = null;
+	static log = null;
 
 	/** @type {string[]} debug プロパティが true の時、直前の処理のスタック（CallSite インスタンス）が入ります */
-	stacks = null;
+	static stacks = null;
 
 	/** @type {string} */
 	directory;
 
-	/** @type {Object.<TimeLimitManager>} */
+	/** @type {Object.<TimeLimitedEntity>} */
 	#children = {};
 
 	/**
 	 *
-	 * @param {TimeLimitManager} manager
-	 */
-	#onRemoveChild(manager)
-	{
-		delete this.#children[manager.entityKey];
-	}
-
-	/**
-	 *
+	 * @param {string} fullPath
 	 * @param {string} fileName
 	 * @param {"r"|"w"} flags
-	 * @return {Promise<{manager:TimeLimitManager, fileHandle:FileHandle}|Error>}
+	 * @return {Promise<{manager:TimeLimitedEntity, fileHandle:FileHandle}|Error>}
 	 */
-	#getTimeLimitManager(fileName, flags)
+	#getTimeLimitManager(fullPath, fileName, flags)
 	{
-		const fullPath = path.join(this.directory, fileName);
 		return new Promise((resolve, reject)=>
 		{
-			if(!checked.has(fileName))
-			{
-				if(fileName.includes(path.sep)) throw FILE_NAME_DIRECTORY_SEPARATOR_ERROR;
-				else checked.add(fileName);
-			}
-
 			/** @type {FileHandle} */
 			let fileHandle;
+
 			fs.promises.open(fullPath, flags)
 			.catch(error =>
 			{
-				if(error) return reject(error); //todo Promise の中断方法の確認！！！ Copilotに聞く！！
+				if(error) return reject(error);
 			})
 			.then(fh =>
 			{
 				fileHandle = fh;
-
-				if(flags === "r" && entityKeyFromPath[fullPath])
-					resolve({manager: this.#children[entityKeyFromPath[fullPath]], fileHandle});
-				else return fh.stat({bigint: true});
+				return fh.stat({bigint: true});
 			})
 			.catch(error =>
 			{
@@ -199,6 +204,24 @@ class TimeLimitedFileCache
 				const dev = typeof stats.dev === "bigint" ? stats.dev : BigInt(stats.dev);
 				const ino = typeof stats.ino === "bigint" ? stats.ino : BigInt(stats.ino);
 				const entityKey = `${dev}:${ino}`;
+
+				if(typeof managerFromEntityKey[entityKey] !== "undefined")
+				{
+
+				}
+				else
+				{
+					const manager = new TimeLimitedEntity(this, entityKey, fileName);
+					managerFromEntityKey[entityKey] = manager;
+					managerFromFullPath[fullPath] = manager;
+					if(typeof entityKeyFromPath[fullPath] !== "undefined")
+					{
+						const oldEntityKey = entityKeyFromPath[fullPath];
+						pathsFromEntityKey[oldEntityKey].delete(fullPath);
+					}
+					entityKeyFromPath[fullPath] = entityKey;
+					if(typeof pathsFromEntityKey[entityKey] === "undefined")
+				}
 
 				if(entityKeyFromPath[fullPath] && entityKeyFromPath[fullPath] !== entityKey)
 				{
@@ -215,79 +238,126 @@ class TimeLimitedFileCache
 				pathsFromEntityKey[entityKey].add(fullPath);
 
 				if(typeof this.#children[entityKey] === "undefined")
-					this.#children[entityKey] = new TimeLimitManager(this, entityKey, fileName, this.#onRemoveChild);
+					this.#children[entityKey] = new TimeLimitedEntity(this, entityKey, fileName);
 
 				resolve({manager:this.#children[entityKey], fileHandle});
 			});
 		});
 	}
 
-	constructor(directory)
+	constructor()
 	{
 		if(!TimeLimitedFileCache.#enableConstruction) throw new Error("new TimeLimitedFileCache() は禁止されてますよ。初期化処理をちゃんとしたいので、TimeLimitedFileCache.fromDirectory() メソッドで TimeLimitedFileCache インスタンスを取得してください");
-
-		this.directory = directory;
-		caches[directory] = this;
 	}
 
 	/** @type {Map<boolean, Promise<TimeLimitedFileCache>>} */
 	#initializeCache = new Map();
 
+	/** @type {string} */
+	#entityKey;
+
 	/**
 	 *
+	 * @param {string} directory
 	 * @param {boolean} create
 	 * @return {Promise<TimeLimitedFileCache|{error:Error, message:string}>}
 	 */
-	#initialize(create)
+	#initialize(directory, create)
 	{
 		if(!this.#initializeCache.has(create))
 		{
 			this.#initializeCache.set(create, new Promise((resolve, reject)=>
 			{
-				fs.stat(this.directory, (error, stats)=>
+				fs.stat(directory, {bigint: true}, (error, stats)=>
 				{
 					if(error)
 					{
-						if(!create)
+						let message;
+						if(error.code === "ENOENT")
 						{
-							const message = "存在しないディレクトリを指定しました。ディレクトリを自動で作成したい場合は TimeLimitedFileCache.fromDirectory() の引数 create に true を指定してください";
-							reject({error, message});
-							console.error(message);
-							this.#initializeCache.delete(create);
-						}
-						else
-						{
-							fs.mkdir(this.directory, {recursive: true}, (error)=>
+							if(create)
 							{
-								if(!error)
+								fs.mkdir(directory, {recursive: true}, (error)=>
 								{
-									if(logger)
-										logger.log({filePath: this.directory}, "ディレクトリが存在しなかったため、作成しました");
+									if(!error)
+									{
+										if(Logger)
+											Logger.log({filePath: this.directory}, "ディレクトリが存在しなかったため、作成しました");
 
-									resolve(this);
-								}
-								else
-								{
-									const message = "TimeLimitedFileCache.fromDirectory() メソッドで、ディレクトリを作成しようとしましたが作成できませんでした";
-									reject({error, message});
-									console.error(message);
-								}
-								this.#initializeCache.delete(create);
-							});
+										resolve(this);
+									}
+									else
+									{
+										let message;
+										if(error.code === "EACCES" || error.code === "EPERM")
+											message = "TimeLimitedFileCache.fromDirectory() メソッドで、ディレクトリを作成しようとしましたが権限の関係で作成する事が出来ませんでした";
+										else if(error.code === "EROFS")
+											message = "TimeLimitedFileCache.fromDirectory() メソッドで、ディレクトリを作成しようとしましたが、読み取り専用のディレクトリのようで作成する事が出来ませんでした";
+										else if(error.code === "ENOSPC")
+											message = "TimeLimitedFileCache.fromDirectory() メソッドで、ディレクトリを作成しようとしましたが、空き容量が足りないみたいです";
+										else if(error.code === "EIO")
+											message = "TimeLimitedFileCache.fromDirectory() メソッドで、ディレクトリを作成しようとしましたが、ハードウェアの故障みたいなエラーが出ました";
+										else
+											message = "TimeLimitedFileCache.fromDirectory() メソッドで、ディレクトリを作成しようとしましたが、不明なエラーが発生しました。エラーコードなどでググってみて、原因を調査してみてください";
+
+										reject({error, message});
+										console.error(message);
+									}
+									this.#initializeCache.delete(create);
+								});
+								return;
+							}
+							else
+							{
+								message = "存在しないディレクトリを指定しました。ディレクトリを自動で作成したい場合は TimeLimitedFileCache.fromDirectory() の引数 create に true を指定してください";
+							}
 						}
+						else if(error.code === "ENOTDIR")
+							message = "TimeLimitedFileCache.fromDirectory() に指定したディレクトリパスの途中にファイルが混じっているみたいです";
+						else if(error.code === "ELOOP")
+							message = "TimeLimitedFileCache.fromDirectory() に指定したディレクトリがシンボリックリンクで無限ループされているか、OS がディレクトリ実体に辿り着けないくらいリンク回数が多すぎる可能性があります";
+						else if(error.code === "ENAMETOOLONG")
+							message = "TimeLimitedFileCache.fromDirectory() に指定したディレクトリのフルパスの文字数が OS の制限を超えているみたいです";
+						else if(error.code === "EACCES" || error.code === "EPERM")
+							message = "TimeLimitedFileCache.fromDirectory() に指定したディレクトリが権限の関係でアクセスする事が出来ませんでした";
+						else if(error.code === "EIO")
+							message = "TimeLimitedFileCache.fromDirectory() に指定されたパスの確認をしてみたところ、ハードウェアの故障みたいなエラーが出ました";
+						else
+							message = "ディレクトリパス確認時に不明なエラーが発生しました。エラーコードなどからエラーの内容をググったりして調べてみてください";
+
+						reject({error, message});
+						console.error(message);
+						this.#initializeCache.delete(create);
 					}
 					else
 					{
-						if(stats.isDirectory()) resolve(this);
+						if(stats.isDirectory())
+						{
+							const newEntityKey = this.#entityKey = `${stats.dev}:${stats.ino}`;
+							cacheFromEntityKey[newEntityKey] = this;
+							if(typeof entityKeyFromPath[directory] !== "undefined")
+							{
+								const oldEntityKey = entityKeyFromPath[directory];
+								pathsFromEntityKey[oldEntityKey].delete(directory);
+							}
+							entityKeyFromPath[directory] = newEntityKey;
+							if(typeof pathsFromEntityKey[newEntityKey] === "undefined")
+								pathsFromEntityKey[newEntityKey] = new Set();
+
+							pathsFromEntityKey[newEntityKey].add(directory);//todo 設計レベルで考えなきゃ！！！！
+							this.directory = directory;
+							resolve(this);
+						}
 						else
 						{
-							const message = "TimeLimitedFileCache.fromDirectory() メソッドで、ディレクトリパスでは無くファイルパスを指定しています";
-							reject({error: new Error(message), message});
-							console.error(message);
+							const message = "TimeLimitedFileCache.fromDirectory() メソッドで、ディレクトリパスでは無くファイルパスを指定しているみたいです";
+							const error = new Error(message);
+							reject({error, message});
+							console.error(error);
 						}
 						this.#initializeCache.delete(create);
 					}
-				})
+				});
 			}));
 		}
 		return this.#initializeCache.get(create);
@@ -303,24 +373,34 @@ class TimeLimitedFileCache
 	{
 		return new Promise((resolve, reject)=>
 		{
+			fileNameCheck(fileName);
 			const fullPath = path.join(this.directory, fileName);
-			if(typeof entityKeyFromPath[fullPath] !== "undefined")
+			if(typeof managerFromFullPath[fullPath] !== "undefined")
 			{
-				const key = entityKeyFromPath[fullPath];
-				const result = this.#children[key].readFromMemory();
+				const manager = managerFromFullPath[fullPath];
+				const result = manager.readAsBufferFromMemory();
 				if(result !== null) return resolve(result);
-
-
 			}
-			this.#getTimeLimitManager(fileName, "r").then(({manager, fileHandle})=>
+			/*if(typeof entityKeyFromPath[fullPath] !== "undefined")
 			{
-				resolve(manager.readAsBuffer(fileHandle, waitForClose));
+				const entityKey = entityKeyFromPath[path.join(this.directory, fileName)];
+
+				if(typeof this.#children[entityKey] !== "undefined")
+				{
+					const result = this.#children[entityKey].readAsBufferFromMemory();
+					if(result !== null) return resolve(result);
+				}
+			}*/
+
+			this.#getTimeLimitManager(fullPath, fileName, "r").then(({manager, fileHandle})=>
+			{
+				resolve(manager.readAsBufferFromFile(fileHandle, waitForClose));
 			}).catch((error)=>
 			{
 				if(error.code === "ENOENT")
 				{
-					if(logger)
-						logger.log({filePath: this.directory + path.sep + fileName}, logger.NON_EXIST_CACHE);
+					if(Logger)
+						Logger.log({filePath: this.directory + path.sep + fileName}, Logger.NON_EXIST_CACHE);
 
 					resolve(null);
 				}
@@ -340,7 +420,7 @@ class TimeLimitedFileCache
 		if(typeof this.#children[fileName] === "undefined")
 		{
 			if(fileName.includes(path.sep)) throw FILE_NAME_DIRECTORY_SEPARATOR_ERROR;
-			this.#children[fileName] = new TimeLimitManager(this, fileName);
+			this.#children[fileName] = new TimeLimitedEntity(this, fileName);
 		}
 		return this.#children[fileName].readAsStream(maxStreamBufferSize);
 	}
@@ -356,7 +436,22 @@ class TimeLimitedFileCache
 	{
 		return new Promise((resolve, reject)=>
 		{
-			this.#getTimeLimitManager(fileName, "w").then(({manager, fileHandle})=>
+			fileNameCheck(fileName);
+			buffer = normalizeToBuffer(buffer);
+			const fullPath = path.join(this.directory, fileName);
+			if(typeof entityKeyFromPath[fullPath] !== "undefined")
+			{
+				const entityKey = entityKeyFromPath[fullPath];
+
+				if(typeof this.#children[entityKey] !== "undefined")
+				{
+					const result = this.#children[entityKey].preWriteCheck(buffer);
+					if(result === TimeLimitedFileCache.WRITE_RESULT.SKIPPED_SAME_AS_MEMORY_CACHE)
+						return resolve(result);
+				}
+			}
+
+			this.#getTimeLimitManager(fullPath, fileName, "w").then(({manager, fileHandle})=>
 			{
 				resolve(manager.writeAsBuffer(fileHandle, buffer, waitForClose));
 			}).catch((error)=>
@@ -379,18 +474,27 @@ class TimeLimitedFileCache
 		if(typeof this.#children[fileName] === "undefined")
 		{
 			if(fileName.includes(path.sep)) throw FILE_NAME_DIRECTORY_SEPARATOR_ERROR;
-			this.#children[fileName] = new TimeLimitManager(this, fileName);
+			this.#children[fileName] = new TimeLimitedEntity(this, fileName);
 		}
 		return this.#children[fileName].writeAsStream(maxStreamBufferSize, writeStreamErrorTimeout);
 	}
 }
 
+const fileNameCheck = (fileName)=>
+{
+	if(!checkedFileName.has(fileName))
+	{
+		if(fileName.includes(path.sep)) throw FILE_NAME_DIRECTORY_SEPARATOR_ERROR;
+		else checkedFileName.add(fileName);
+	}
+}
 /**
  *
- * @param {TimeLimitManager} manager
+ * @param {TimeLimitedFile} timeLimitedFile
+ * @param {Logger} logger
  * @return {Promise<void>}
  */
-const acquireGlobalReadSlot = (manager)=>
+const acquireGlobalReadSlot = (timeLimitedFile, logger)=>
 {
 	return new Promise((resolve)=>
 	{
@@ -401,78 +505,544 @@ const acquireGlobalReadSlot = (manager)=>
 		}
 		else
 		{
-			if(logger)
-				logger.log(manager, logger.READ_QUEUE_DUE_TO_GLOBAL_READ_LIMIT);
+			logger?.out(Logger.READ_QUEUE_DUE_TO_GLOBAL_READ_LIMIT);
 
 			globalReadWait.push(resolve);
 		}
 
-		if(logger)
-			console.log("acquire currentGlobalReadings : " + currentGlobalReadings);
+		if(logger) console.log("acquire currentGlobalReadings : " + currentGlobalReadings);
 	});
 };
 
 /**
  *
- * @param {TimeLimitManager} manager
+ * @param {TimeLimitedEntity} timeLimitedFile
  */
-const releaseGlobalReadSlot = (manager) =>
+// const releaseGlobalReadSlot = (manager) =>
+/**
+ *
+ * @param {TimeLimitedFile} timeLimitedFile
+ * @param {Logger} logger
+ */
+const releaseGlobalReadSlot = (timeLimitedFile, logger) =>
 {
 	if(globalReadWait.length)
 	{
 		const next = globalReadWait.shift();
 		if(typeof next === 'function') next();
-		else if(logger)
-			logger.log(manager, logger.GLOBAL_WAIT_ITEM_MUST_BE_FUNCTION);
+		else logger?.out(Logger.GLOBAL_WAIT_ITEM_MUST_BE_FUNCTION);
 	}
 	else
 	{
 		if(currentGlobalReadings > 0) currentGlobalReadings--;
-		else if(logger)
-			logger.log(manager, logger.CURRENT_GLOBAL_READINGS_UNDERFLOW)
+		else logger?.out(Logger.CURRENT_GLOBAL_READINGS_UNDERFLOW)
 	}
 
-	if(logger)
-		console.log("release currentGlobalReadings : " + currentGlobalReadings);
-};
+	if(logger) console.log("release currentGlobalReadings : " + currentGlobalReadings);
+}
 
-class TimeLimitManager
+class Entity
 {
+	/** @type {string} */
+	entityKey;
+
+	/** @type {Set<FileSystemEntry>} */
+	entries = new Set();
+
+	constructor(entityKey)
+	{
+		this.entityKey = entityKey;
+	}
+}
+
+class FileSystemEntry
+{
+	/** @type {Entity} */
+	#entity;
+
+	/** @type {string} */
+	fullPath;
+
+	constructor(fullPath)
+	{
+		this.fullPath = fullPath;
+	}
+}
+
+class CacheDirectory extends FileSystemEntry
+{
+
+	/** @type {Object.<CacheDirectory>} */
+	static directoryFromFullPath = {};
+
+	/** @type {DirectoryEntity} */
+	#entity;
+
+	/**
+	 *
+	 * @param {string} fileName
+	 * @param {boolean} [waitForClose=true]
+	 * @return {Promise<Buffer, Error>}
+	 */
+	readAsBuffer(fileName, waitForClose=true)
+	{
+		return this.#entity.readAsBuffer(fileName, waitForClose);
+	}
+
+
+	writeAsBuffer(fileName, buffer, waitForClose=true)
+	{
+		return this.#entity.writeAsBuffer(fileName, buffer, waitForClose);
+	}
+
+	/** @return {number} */
+	get memoryTTL() { return this.#entity.memoryTTL; }
+
+	/** @return {number} */
+	get fileTTL() { return this.#entity.fileTTL; }
+
+	setMemoryTTL(memoryTTL, updateTTL = false)
+	{
+		this.#entity.memoryTTL = memoryTTL;
+	}
+
+	setFileTTL(fileTTL, updateTTL = false)
+	{
+		this.#entity.fileTTL = fileTTL;
+	}
+
+	constructor(fullPath)
+	{
+		super(fullPath);
+	}
+}
+
+class DirectoryEntity extends Entity
+{
+	/** @type {Object.<DirectoryEntity>} */
+	static fromEntityKey = {};
+
+	/** @type {Object.<TimeLimitedFile>} */
+	#files = {};
+
+	/** @type {number} */
+	memoryTTL = 10_000;
+
+	/** @type {number} */
+	fileTTL = 600_000;
+
+	/**
+	 *
+	 * @param {string} fileName
+	 * @param {boolean} waitForClose
+	 * @return {Promise<Buffer, Error>}
+	 */
+	readAsBuffer(fileName, waitForClose)
+	{
+		return this.#getFile(fileName).readAsBuffer(waitForClose);
+	}
+
+
+	writeAsBuffer(fileName, buffer, waitForClose)
+	{
+		return this.#getFile(fileName).writeAsBuffer(buffer, waitForClose);
+	}
+
+	/**
+	 *
+	 * @param {string} fileName
+	 * @return {TimeLimitedFile}
+	 */
+	#getFile(fileName)
+	{
+		if(typeof this.#files[fileName] === "undefined")
+		{
+			fileNameCheck(fileName);
+			this.#files[fileName] = new TimeLimitedFile(this, path.join(this.fullPath, fileName));
+		}
+		return this.#files[fileName];
+	}
+
+	constructor(entityKey)
+	{
+		super(entityKey);
+	}
+}
+
+class TimeLimitedFile extends FileSystemEntry
+{
+	/** @type {CacheDirectory} */
+	parent;
+
+	/** @type {TimeLimitedEntity} */
+	#entity;
+
+	/** @type {string} */
+	fullPath;
+
+	/** @type {Promise<{entity:TimeLimitedEntity, fileHandle:FileHandle}, Error>} */
+	#acquirePromise;
+
+	/** @type {NodeJS.Timeout|number} */
+	#fileTimeLimit;
+
+	/** @type {Promise<Buffer, Error>} */
+	#readAsBufferPromise;
+
+	get entityKey() { return this.#entity?.entityKey || "まだ実体キーが取得されていません"; }
+
+	/**
+	 *
+	 * @param {boolean} waitForClose
+	 * @return {Promise<Buffer, Error>}
+	 */
+	readAsBuffer(waitForClose)
+	{
+		let logger; if(Logger) logger = new Logger(this);
+		this.#updateTimeLimit(logger);
+		if(!this.#readAsBufferPromise)
+		{
+			this.#readAsBufferPromise = new Promise((resolve, reject)=>
+			{
+				if(!this.#entity)
+				{
+					this.#acquire().then(({fileHandle})=>
+					{
+						return this.#readAsBuffer(waitForClose, logger, fileHandle);
+					}).then(resolve).catch(reject).finally(()=>
+					{
+						this.#readAsBufferPromise = null;
+					});
+				}
+				else
+				{
+					this.#readAsBuffer(waitForClose, logger, null)
+					.then(resolve).catch(reject).finally(()=>
+					{
+						this.#readAsBufferPromise = null;
+					});
+				}
+			});
+		}
+		return this.#readAsBufferPromise;
+	}
+
+	#readAsBuffer(waitForClose, logger, fileHandle)
+	{
+		return new Promise((resolve, reject)=>
+		{
+			const result = this.#entity.readFromMemory(waitForClose, logger);
+			if(result === null)
+			{
+				acquireGlobalReadSlot(this, logger).then(()=>
+				{
+					let readPromise;
+					if(fileHandle) readPromise = this.#entity.readFromFileHandle(fileHandle, waitForClose, logger);
+					else readPromise = this.#readFromFullPath(waitForClose, logger);
+
+					readPromise.then(resolve).catch(reject).finally(()=>
+					{
+						releaseGlobalReadSlot(this, logger);
+					});
+				})
+			}
+			else if(result instanceof Promise)
+			{
+				result.then(resolve).catch(reject);
+			}
+			else resolve(result);
+		});
+	}
+
+	#readFromFullPath(waitForClose, logger)
+	{
+		return new Promise((resolve, reject)=>
+		{
+			fs.promises.open(this.fullPath, "r").then((fileHandle)=>
+			{
+				return this.#entity.readFromFileHandle(fileHandle, waitForClose, logger, true);
+			}).then(data=>
+			{
+				resolve(data);
+			}).catch(error =>
+			{
+				if(error.code === "ENOENT") resolve(null);
+				else reject(error);
+			});
+		});
+	}
+
+
+	writeAsBuffer(buffer, waitForClose)
+	{
+		return new Promise((resolve, reject)=>
+		{
+			let logger; if(Logger) logger = new Logger(this);
+			this.#updateTimeLimit(logger);
+			this.#acquire().then(({fileHandle})=>
+			{
+				//todo ここら辺から！！！！設計がちゃんと煮詰まってないよ！！！！
+			})
+		});
+	}
+
+	constructor(parent, fullPath)
+	{
+		super(fullPath);
+		this.parent = parent;
+	}
+
+	/**
+	 *
+	 * @return {Promise<{entity:TimeLimitedEntity, fileHandle:FileHandle}, Error>}
+	 */
+	#acquire()
+	{
+		if(!this.#acquirePromise)
+		{
+			this.#acquirePromise = new Promise((resolve, reject)=>
+			{
+				fs.stat(this.fullPath, {bigint: true}, (error, stats)=>
+				{
+					if(error)
+					{
+						let fileHandle;
+						if(error.code === "ENOENT")
+						{
+							fs.promises.open(this.fullPath, "w+").then((fh)=>
+							{
+								fileHandle = fh;
+								return fh.stat({bigint: true});
+							}).then(stats=>
+							{
+								this.#acquirePromise = null;
+								resolve({entity: this.#getEntityFromStats(stats), fileHandle});
+							}).catch(error =>
+							{
+								reject(error);
+							});
+						}
+						else return reject(error);
+					}
+
+					this.#acquirePromise = null;
+					resolve({entity: this.#getEntityFromStats(stats)});
+				});
+			});
+		}
+		return this.#acquirePromise;
+	}
+
+	/**
+	 *
+	 * @param {fs.BigIntStats} stats
+	 * @return {TimeLimitedEntity}
+	 */
+	#getEntityFromStats(stats)
+	{
+		const entityKey = `${stats.dev}:${stats.ino}`;
+
+		const fromEntityKey = TimeLimitedEntity.fromEntityKey;
+
+		if(typeof fromEntityKey[entityKey] === "undefined")
+			fromEntityKey[entityKey] = new TimeLimitedEntity(entityKey);
+
+		const entity = fromEntityKey[entityKey];
+
+		if(this.#entity !== entity)
+		{
+			if(typeof this.#entity !== "undefined")
+			{
+				this.#entity.entries.delete(this);
+				if(this.#entity.entries.size <= 0)
+					delete fromEntityKey[this.#entity.entityKey];
+			}
+			this.#entity = entity;
+			entity.entries.add(this);
+		}
+
+		return entity;
+	}
+
+	#updateTimeLimit()
+	{
+		if(this.#fileTimeLimit) clearTimeout(this.#fileTimeLimit);
+		this.#fileTimeLimit = setTimeout(this.#removeCacheFile, this.parent.fileTTL, this);
+	}
+
+	#removeCacheFile = (file)=>
+	{
+		file.#entity.entries.delete(file);
+		if(file.#entity.entries.size <= 0)
+			delete TimeLimitedEntity.fromEntityKey[this.#entity.entityKey];
+
+		file.#entity = null;
+		file.fullPath = null;
+		file.#fileTimeLimit = null;
+	}
+}
+
+class TimeLimitedEntity extends Entity
+{
+	/** @type {Object.<TimeLimitedEntity>} */
+	static fromEntityKey = {};
+
+	/** @type {Buffer} */
+	#memoryCache;
+
+	/** @type {Map<boolean, Promise<Buffer, Error>>} */
+	#readFromFileHandlePromise = new Map();
+
+	/** @type {NodeJS.Timeout|number} */
+	#memoryTimeLimit;
+
+	readFromMemory(waitForClose, logger)
+	{
+		if(this.#memoryCache)
+		{
+			this.#updateTimeLimit(logger);
+			logger?.out(Logger.READ_FROM_MEMORY_CACHE, this.#memoryCache);
+
+			return this.#memoryCache;
+		}
+		else if(this.#readFromFileHandlePromise.has(waitForClose))
+		{
+			logger.out(Logger.READ_FROM_PROMISE);
+
+			return this.#readFromFileHandlePromise.get(waitForClose);
+		}
+		else return null;
+	}
+
+	/**
+	 *
+	 * @param {fs.FileHandle} fileHandle
+	 * @param {boolean} waitForClose
+	 * @param {Logger} logger
+	 * @param {boolean} [overwritePromise]
+	 * @return {Promise<Buffer, Error>}
+	 */
+	readFromFileHandle(fileHandle, waitForClose, logger, overwritePromise)
+	{
+		if(!this.#readFromFileHandlePromise.has(waitForClose))
+		{
+			this.#readFromFileHandlePromise.set(waitForClose, new Promise((resolve, reject)=>
+			{
+				let returnData, returnError;
+				fileHandle.readFile().catch((error)=>
+				{
+					returnError = error;
+					if(!waitForClose)
+					{
+						reject(error);
+						this.#readFromFileHandlePromise.delete(waitForClose);
+					}
+
+					logger?.out(Logger.READ_BUFFER_READ_ERROR);
+				}).then(data =>
+				{
+					this.#memoryCache = data;
+					this.#updateTimeLimit(logger);
+					returnData = data;
+					if(!waitForClose)
+					{
+						resolve(data);
+						this.#readFromFileHandlePromise.delete(waitForClose);
+					}
+				}).finally(()=>
+				{
+					fileHandle.close().then(()=>
+					{
+						if(waitForClose)
+						{
+							if(returnError) reject(returnError);
+							else if(returnData) resolve(returnData);
+							else console.log("ここの処理に来ちゃダメです");
+						}
+					}).catch(error=>
+					{
+						if(waitForClose) reject(error);
+
+						logger?.out(Logger.READ_BUFFER_CLOSE_ERROR);
+					}).finally(()=>
+					{
+						if(waitForClose) this.#readFromFileHandlePromise.delete(waitForClose);
+					});
+				})
+			}));
+		}
+
+		return this.#readFromFileHandlePromise.get(waitForClose);
+	}
+
+	#updateTimeLimit(logger)
+	{
+		if(this.#memoryTimeLimit) clearTimeout(this.#memoryTimeLimit);
+		this.#memoryTimeLimit = setTimeout(this.#removeMemoryCache, this.parent.memoryTTL, this, logger);
+	}
+
+	#removeMemoryCache = (entity, logger)=>
+	{
+		entity.#memoryCache = null;
+		entity.#memoryTimeLimit = null;
+
+		logger?.out(Logger.REMOVE_MEMORY_CACHE);
+	}
+
+	constructor(entityKey)
+	{
+		super(entityKey);
+	}
+
+
+}
+
+class TimeLimitedEntity_
+{
+
 	/** @type {TimeLimitedFileCache} */
 	parent;
 
 	/** @type {string} */
 	filePath;
 
-	/** @type {string} */
-	entityKey;
+	/** @type Set<string> */
+	paths = new Set();
 
 	/** @type {Buffer} */
-	#data;
-
-	/** @type {NodeJS.Timeout|number} */
-	#memoryTimeLimit;
+	#memoryCache;
 
 	/** @type {number} */
 	maxConcurrentReads;
 
 	/** @type {NodeJS.Timeout|number} */
+	#memoryTimeLimit;
+
+	/** @type {NodeJS.Timeout|number} */
 	#fileTimeLimit;
 
-	/** @type {Promise<undefined>} 書込み中で書込み完了の resolve を出す Promise インスタンスが入ります */
-	#writing;
+	/** 書込み中で書込み完了の resolve を出す Promise インスタンスが入ります
+	 * @type {Promise<undefined>}  */
+	#writingToFile;
 
-	/** @type {Promise[]} 各種読み取り系 readAsBuffer() の Promise インスタンスと、readAsStream() の Promise インスタンス達が入ります */
-	#readings = [];
+	/** 各種読み取り系 readAsBuffer() の Promise インスタンスと、readAsStream() の Promise インスタンス達が入ります
+	 *  @type {Promise[]}  */
+	#readingsFromFile = [];
 
-	/** @type {Promise.<Buffer|undefined>} readAsBuffer() でメモリキャッシュが無くて、ファイルの内容を読み取る処理に入った時の Promise インスタンス が入ります */
+	/** readAsBuffer() でメモリキャッシュが無くて、ファイルの内容を読み取る処理に入った時の Promise インスタンス が入ります
+	 *  @type {Promise.<Buffer|undefined>}  */
 	#readPromise;
 
-	/** @type {(value:Buffer) => void} #readPromise の resolve が入ります。writeAsBuffer でメモリが更新されたら強制的に resolve させるためです */
+	/** #readPromise の resolve が入ります。writeAsBuffer でメモリが更新されたら強制的に resolve させるためです
+	 * @type {(value:Buffer) => void}  */
 	#readingAsBuffer;
 
-	/** @type {(value:WriteResultKey) => void} writeAsBuffer() や writeAsStream() で書込み待機中になった Promise インスタンス用の resolve が入っています */
+	/** writeAsBuffer() や writeAsStream() で書込み待機中になった Promise インスタンス用の resolve が入っています
+	 * @type {(value:WriteResultKey) => void}  */
 	#pendingWrite;
+
+	/** @type {Set<TimeLimitedFile>} */
+	sourceFiles = new Set();
 
 	/**
 	 * @typedef {object} ReadFuncOptions
@@ -496,41 +1066,42 @@ class TimeLimitManager
 	/** @type {Array.<{readFunc:(options:ReadFuncOptions)=>any, options:ReadFuncOptions}>} */
 	#readWait = [];
 
-	#onRemove;
+	/** @type {string} */
+	entityKey;
 
 	/**
 	 *
 	 * @param {TimeLimitedFileCache} parent
-	 * @param {string} key
+	 * @param {string} entityKey
 	 * @param {string} fileName
-	 * @param {(manager:TimeLimitManager)=>void} onRemove
+	 * @param {string} fullPath
 	 */
-	constructor(parent, key, fileName, onRemove)
+	constructor(parent, entityKey, fileName, fullPath)
 	{
 		this.parent = parent;
-		this.entityKey = key;
 		this.maxConcurrentReads = parent.maxConcurrentReadsPerFile;
 		this.filePath = path.join(parent.directory, fileName);
-		this.#onRemove = onRemove;
+		this.paths.add(fullPath);
+		this.entityKey = entityKey;
 	}
 
 	/**
 	 *
 	 * @return {Promise<Buffer|null>|Buffer|null}
 	 */
-	readFromMemory()
+	readAsBufferFromMemory()
 	{
-		if(this.#data)
+		if(this.#memoryCache)
 		{
 			this.#updateTimeLimit();
-			if(logger)
-				logger.log(this, logger.READ_FROM_MEMORY_CACHE, logger.outputDataForLog(this.#data));
-			return this.#data;
+			if(Logger)
+				Logger.log(this, Logger.READ_FROM_MEMORY_CACHE, Logger.outputDataForLog(this.#memoryCache));
+			return this.#memoryCache;
 		}
 		else if(this.#readPromise)
 		{
-			if(logger)
-				logger.log(this, logger.READ_FROM_PROMISE);
+			if(Logger)
+				Logger.log(this, Logger.READ_FROM_PROMISE);
 
 			return this.#readPromise;
 		}
@@ -542,7 +1113,7 @@ class TimeLimitManager
 	 * @param {boolean} waitForClose
 	 * @return {Promise<Buffer|Error>}
 	 */
-	readAsBuffer(fileHandle, waitForClose)
+	readAsBufferFromFile(fileHandle, waitForClose)
 	{
 		this.#readPromise = new Promise((resolve, reject) =>
 		{
@@ -550,27 +1121,27 @@ class TimeLimitManager
 			const options = {fileHandle, waitForClose, resolve, reject};
 			this.#readingAsBuffer = resolve;
 
-			if(!this.#writing)
+			if(!this.#writingToFile)
 			{
-				this.#readAsBuffer(options);
+				this.#readAsBufferFromFile(options);
 			}
 			else
 			{
-				this.#writing.then(()=>
+				this.#writingToFile.then(()=>
 				{
 					if(this.#readingAsBuffer && this.#readingAsBuffer === resolve)
 					{
-						if(logger)
-							logger.log(this, logger.READ_START_DUE_TO_WRITE_STREAM_COMPLETE);
+						if(Logger)
+							Logger.log(this, Logger.READ_START_DUE_TO_WRITE_STREAM_COMPLETE);
 
-						this.#readAsBuffer(options);
+						this.#readAsBufferFromFile(options);
 					}
-					else if(logger)
-						logger.log(this, logger.READ_SKIPPED_DUE_TO_MEMORY_CACHE_UPDATE_AFTER_STREAM_WRITE);
+					else if(Logger)
+						Logger.log(this, Logger.READ_SKIPPED_DUE_TO_MEMORY_CACHE_UPDATE_AFTER_STREAM_WRITE);
 				});
 
-				if(logger)
-					logger.log(this, logger.READ_QUEUE);
+				if(Logger)
+					Logger.log(this, Logger.READ_QUEUE);
 			}
 		});
 		const onAfterSettle = ()=>
@@ -591,17 +1162,17 @@ class TimeLimitManager
 	 *
 	 * @param {ReadBufferFuncOptions} options
 	 */
-	#readAsBuffer(options)
+	#readAsBufferFromFile(options)
 	{
-		const len = this.#readings.length;
+		const len = this.#readingsFromFile.length;
 		if(len < this.maxConcurrentReads)
-			this.#readAsBufferFunc(options);
+			this.#readAsBufferFuncFromFile(options);
 		else
 		{
-			if(logger)
-				logger.log(this, logger.READ_QUEUE_DUE_TO_FILE_READ_LIMIT);
+			if(Logger)
+				Logger.log(this, Logger.READ_QUEUE_DUE_TO_FILE_READ_LIMIT);
 
-			this.#readWait.push({readFunc: (options)=>this.#readAsBufferFunc(options), options});
+			this.#readWait.push({readFunc: (options)=>this.#readAsBufferFuncFromFile(options), options});
 		}
 	}
 
@@ -609,16 +1180,16 @@ class TimeLimitManager
 	 *
 	 * @param {ReadBufferFuncOptions} options
 	 */
-	#readAsBufferFunc(options)
+	#readAsBufferFuncFromFile(options)
 	{
 		const fileHandle = options.fileHandle;
 		const parentResolve = options.resolve;
 		const parentReject = options.reject;
 		const waitForClose = options.waitForClose;
-		this.#data = null;
+		this.#memoryCache = null;
 
-		if(logger)
-			logger.log(this, logger.READ_START_FROM_FILE_SYSTEM);
+		if(Logger)
+			Logger.log(this, Logger.READ_START_FROM_FILE_SYSTEM);
 
 		const fileReading = new Promise((resolve) =>
 		{
@@ -627,46 +1198,46 @@ class TimeLimitManager
 			{
 				fileHandle.readFile().then(data=>
 				{
-					if(!this.#data)
+					if(!this.#memoryCache)
 					{
-						this.#data = data;
-						if(logger)
+						this.#memoryCache = data;
+						if(Logger)
 						{
-							logger.log(this, logger.READ_COMPLETE_FROM_FILE_SYSTEM, logger.outputDataForLog(data));
-							logger.log(this, logger.UPDATED_MEMORY_CACHE_AFTER_READ_FROM_FILE);
+							Logger.log(this, Logger.READ_COMPLETE_FROM_FILE_SYSTEM, Logger.outputDataForLog(data));
+							Logger.log(this, Logger.UPDATED_MEMORY_CACHE_AFTER_READ_FROM_FILE);
 						}
 					}
 					else
 					{
-						if(logger)
+						if(Logger)
 						{
-							logger.log(this, logger.READ_COMPLETE_FROM_FILE_SYSTEM, logger.outputDataForLog(data));
-							logger.log(this, logger.READ_COMPLETE_FROM_FILE_SYSTEM_BUT_MEMORY_CACHE_UPDATED, logger.outputDataForLog(this.#data));
+							Logger.log(this, Logger.READ_COMPLETE_FROM_FILE_SYSTEM, Logger.outputDataForLog(data));
+							Logger.log(this, Logger.READ_COMPLETE_FROM_FILE_SYSTEM_BUT_MEMORY_CACHE_UPDATED, Logger.outputDataForLog(this.#memoryCache));
 						}
 					}
-					returnData = this.#data;
+					returnData = this.#memoryCache;
 
 				}).catch(error=>
 				{
-					if(!this.#data)
+					if(!this.#memoryCache)
 					{
-						if(logger)
-							logger.log(this, logger.READ_BUFFER_ERROR, error);
+						if(Logger)
+							Logger.log(this, Logger.READ_BUFFER_ERROR, error);
 
 						returnError = error;
 					}
 					else
 					{
-						returnData = this.#data;
-						if(logger)
-							logger.log(this, logger.READ_FROM_MEMORY_CACHE, logger.outputDataForLog(this.#data));
+						returnData = this.#memoryCache;
+						if(Logger)
+							Logger.log(this, Logger.READ_FROM_MEMORY_CACHE, Logger.outputDataForLog(this.#memoryCache));
 					}
 				}).finally(()=>
 				{
-					const index = this.#readings.indexOf(fileReading);
-					if(index >= 0) this.#readings.splice(index, 1);
-					else if(logger)
-						logger.log(this, logger.PROMISE_NOT_FOUND_IN_FINALIZE);
+					const index = this.#readingsFromFile.indexOf(fileReading);
+					if(index >= 0) this.#readingsFromFile.splice(index, 1);
+					else if(Logger)
+						Logger.log(this, Logger.PROMISE_NOT_FOUND_IN_FINALIZE);
 
 					this.#readPromise = null;
 					this.#updateTimeLimit();
@@ -678,6 +1249,7 @@ class TimeLimitManager
 						{
 							parentResolve(returnData);
 							releaseGlobalReadSlot(this);
+							resolve();
 						}
 					}
 
@@ -691,13 +1263,14 @@ class TimeLimitManager
 						{
 							parentResolve(returnData);
 							releaseGlobalReadSlot(this);
+							resolve();
 						}
 					}
 				});
 			});
 		});
 
-		this.#readings.push(fileReading);
+		this.#readingsFromFile.push(fileReading);
 	}
 
 	/**
@@ -714,16 +1287,16 @@ class TimeLimitManager
 
 	#tryCreateReadStreamAgent(maxStreamBufferSize, resolve, reject)
 	{
-		if(!this.#writing)
+		if(!this.#writingToFile)
 		{
 			this.#createReadStreamAgent(maxStreamBufferSize, resolve, reject);
 		}
 		else
 		{
-			if(logger)
-				logger.log(this, logger.READ_STREAM_QUEUED_DUE_TO_WRITING);
+			if(Logger)
+				Logger.log(this, Logger.READ_STREAM_QUEUED_DUE_TO_WRITING);
 
-			this.#writing.then(()=>
+			this.#writingToFile.then(()=>
 			{
 				this.#tryCreateReadStreamAgent(maxStreamBufferSize, resolve, reject);
 				// this.#createReadStreamAgent(maxStreamBufferSize, resolve, reject);
@@ -733,12 +1306,12 @@ class TimeLimitManager
 
 	#createReadStreamAgent(maxStreamBufferSize, streamReadyResolve, streamInitFailedReject)
 	{
-		if(this.#readings.length < this.maxConcurrentReads)
+		if(this.#readingsFromFile.length < this.maxConcurrentReads)
 			this.#createReadStreamAgentFunc({maxStreamBufferSize, streamReadyResolve, streamInitFailedReject});
 		else
 		{
-			if(logger)
-				logger.log(this, logger.READ_STREAM_QUEUE_DUE_TO_FILE_READ_LIMIT);
+			if(Logger)
+				Logger.log(this, Logger.READ_STREAM_QUEUE_DUE_TO_FILE_READ_LIMIT);
 
 			this.#readWait.push({readFunc: (options)=>this.#createReadStreamAgentFunc(options), options:{maxStreamBufferSize, streamReadyResolve, streamInitFailedReject}});
 		}
@@ -758,8 +1331,8 @@ class TimeLimitManager
 				options.resolve = resolve;
 				options.reject = reject;
 
-				if(logger)
-					logger.log(this, logger.READ_STREAM_READY);
+				if(Logger)
+					Logger.log(this, Logger.READ_STREAM_READY);
 
 				/** @type {fs.ReadStream} */
 				const readStream = fs.createReadStream(this.filePath, {highWaterMark: maxStreamBufferSize});
@@ -773,10 +1346,10 @@ class TimeLimitManager
 
 				const finalize = ()=>
 				{
-					const index = this.#readings.indexOf(fileReading);
-					if(index >= 0) this.#readings.splice(index, 1);
-					else if(logger)
-						logger.log(this, logger.PROMISE_NOT_FOUND_IN_FINALIZE);
+					const index = this.#readingsFromFile.indexOf(fileReading);
+					if(index >= 0) this.#readingsFromFile.splice(index, 1);
+					else if(Logger)
+						Logger.log(this, Logger.PROMISE_NOT_FOUND_IN_FINALIZE);
 
 					if(this.#readWait.length)
 					{
@@ -788,7 +1361,30 @@ class TimeLimitManager
 			});
 		})
 
-		this.#readings.push(fileReading);
+		this.#readingsFromFile.push(fileReading);
+	}
+
+	preWriteCheck(buffer)
+	{
+		if(this.#pendingWrite)
+		{
+			this.#pendingWrite(TimeLimitedFileCache.WRITE_RESULT.CANCELED_BY_NEWER_REQUEST);
+
+			if(Logger)
+				Logger.log(this, Logger.WRITE_SKIPPED_DUE_TO_NEW_WRITE);
+		}
+
+		if(this.#memoryCache && this.#memoryCache.byteLength === buffer.byteLength && this.#memoryCache.equals(buffer))
+		{
+			this.#updateTimeLimit();
+			this.#pendingWrite = null;
+
+			if(Logger)
+				Logger.log(this, Logger.WRITE_SKIPPED_DATA_UNCHANGED);
+
+			return TimeLimitedFileCache.WRITE_RESULT.SKIPPED_SAME_AS_MEMORY_CACHE;
+		}
+		return false;
 	}
 
 	/**
@@ -801,79 +1397,57 @@ class TimeLimitManager
 	{
 		return new Promise((resolve, reject)=>
 		{
-			const buf = normalizeToBuffer(buffer);
-
 			this.#updateTimeLimit();
 
-			if(this.#pendingWrite)
-			{
-				this.#pendingWrite(TimeLimitedFileCache.WRITE_RESULT.CANCELED_BY_NEWER_REQUEST);
+			this.#pendingWrite = resolve;
 
-				if(logger)
-					logger.log(this, logger.WRITE_SKIPPED_DUE_TO_NEW_WRITE);
+			if(!this.#readingsFromFile.length && !this.#writingToFile)
+			{
+				this.#writeAsBuffer(fileHandle, buffer, resolve, reject, waitForClose);
+			}
+			else if(this.#readingsFromFile.length)
+			{
+				if(Logger)
+					Logger.log(this, Logger.WRITE_QUEUED_DUE_TO_READING, Logger.outputDataForLog(buffer));
+
+				Promise.allSettled(this.#readingsFromFile).then(()=>
+				{
+					if(this.#pendingWrite === resolve)
+					{
+						if(Logger)
+							Logger.log(this, Logger.WRITE_START_FROM_QUEUE_AFTER_READ, Logger.outputDataForLog(buffer));
+
+						this.#writeAsBuffer(fileHandle, buffer, resolve, reject, waitForClose);
+					}
+				});
+			}
+			else if(this.#writingToFile)
+			{
+				if(Logger)
+					Logger.log(this, Logger.WRITE_QUEUED_DUE_TO_WRITING, Logger.outputDataForLog(buffer));
+
+				this.#writingToFile.then(()=>
+				{
+					if(this.#pendingWrite === resolve)
+					{
+						if(Logger)
+							Logger.log(this, Logger.WRITE_START_FROM_QUEUE_AFTER_WRITE);
+
+						this.#writeAsBuffer(fileHandle, buffer, resolve, reject, waitForClose);
+					}
+				});
 			}
 
-			if(this.#data && this.#data.byteLength === buf.byteLength && this.#data.equals(buf))
+			this.#memoryCache = buffer;
+			if(Logger)
+				Logger.log(this, Logger.UPDATED_MEMORY_CACHE, Logger.outputDataForLog(buffer));
+
+			if(this.#readingAsBuffer)
 			{
-				this.#pendingWrite = null;
+				if(Logger)
+					Logger.log(this, Logger.RESOLVE_READ_QUEUE);
 
-				if(logger)
-					logger.log(this, logger.WRITE_SKIPPED_DATA_UNCHANGED);
-
-				resolve(TimeLimitedFileCache.WRITE_RESULT.SKIPPED_SAME_AS_MEMORY_CACHE);
-			}
-			else
-			{
-				this.#pendingWrite = resolve;
-
-				if(!this.#readings.length && !this.#writing)
-				{
-					this.#writeAsBuffer(fileHandle, buf, resolve, reject, waitForClose);
-				}
-				else if(this.#readings.length)
-				{
-					if(logger)
-						logger.log(this, logger.WRITE_QUEUED_DUE_TO_READING, logger.outputDataForLog(buf));
-
-					Promise.allSettled(this.#readings).then(()=>
-					{
-						if(this.#pendingWrite === resolve)
-						{
-							if(logger)
-								logger.log(this, logger.WRITE_START_FROM_QUEUE_AFTER_READ, logger.outputDataForLog(buf));
-
-							this.#writeAsBuffer(fileHandle, buf, resolve, reject, waitForClose);
-						}
-					});
-				}
-				else if(this.#writing)
-				{
-					if(logger)
-						logger.log(this, logger.WRITE_QUEUED_DUE_TO_WRITING, logger.outputDataForLog(buf));
-
-					this.#writing.then(()=>
-					{
-						if(this.#pendingWrite === resolve)
-						{
-							if(logger)
-								logger.log(this, logger.WRITE_START_FROM_QUEUE_AFTER_WRITE);
-
-							this.#writeAsBuffer(fileHandle, buf, resolve, reject, waitForClose);
-						}
-					});
-				}
-
-				this.#data = buf;
-				if(logger)
-					logger.log(this, logger.UPDATED_MEMORY_CACHE, logger.outputDataForLog(buf));
-
-				if(this.#readingAsBuffer)
-				{
-					if(logger)
-						logger.log(this, logger.RESOLVE_READ_QUEUE);
-
-					this.#readingAsBuffer(buf);
-				}
+				this.#readingAsBuffer(buffer);
 			}
 		});
 
@@ -890,35 +1464,47 @@ class TimeLimitManager
 	{
 		this.#pendingWrite = null;
 
-		this.#writing = new Promise(resolve=>
+		this.#writingToFile = new Promise(resolve=>
 		{
-			if(logger)
-				logger.log(this, logger.WRITE_START);
+			let returnData, returnError;
+			if(Logger)
+				Logger.log(this, Logger.WRITE_START);
 
 			fileHandle.writeFile(buffer).then(()=>
 			{
-				parentResolve(TimeLimitedFileCache.WRITE_RESULT.COMPLETED_SUCCESSFULLY);
+				returnData = TimeLimitedFileCache.WRITE_RESULT.COMPLETED_SUCCESSFULLY;
 
-				if(logger)
-					logger.log(this, logger.WRITE_COMPLETE_TO_FILE_SYSTEM);
+				if(Logger)
+					Logger.log(this, Logger.WRITE_COMPLETE_TO_FILE_SYSTEM);
 
 			}).catch(error=>
 			{
-				if(logger)
-					logger.log(this, logger.WRITE_BUFFER_ERROR, error);
+				returnError = error;
+				if(Logger)
+					Logger.log(this, Logger.WRITE_BUFFER_ERROR, error);
 
 				parentReject(error);
 
 			}).finally(()=>
 			{
-				this.#writing = null;
+				this.#writingToFile = null;
 				this.#updateTimeLimit();
 
-				if(!waitForClose) resolve();
+				if(!waitForClose)
+				{
+					if(returnData) parentResolve(returnData);
+					else if(returnError) parentReject(returnError);
+					resolve();
+				}
 				return fileHandle.close();
 			}).then(()=>
 			{
-				if(waitForClose) resolve();
+				if(waitForClose)
+				{
+					if(returnData) parentResolve(returnData);
+					else if(returnError) parentReject(returnError);
+					resolve();
+				}
 			});
 		});
 	}
@@ -936,49 +1522,49 @@ class TimeLimitManager
 			{
 				this.#pendingWrite(TimeLimitedFileCache.WRITE_RESULT.CANCELED_BY_NEWER_REQUEST);
 
-				if(logger)
-					logger.log(this, logger.WRITE_SKIPPED_DUE_TO_NEW_WRITE);
+				if(Logger)
+					Logger.log(this, Logger.WRITE_SKIPPED_DUE_TO_NEW_WRITE);
 			}
 			this.#pendingWrite = resolve;
 
-			if(!this.#readings.length && !this.#writing)
+			if(!this.#readingsFromFile.length && !this.#writingToFile)
 			{
 				resolve(this.#createWriteStreamAgent(maxStreamBufferSize, writeStreamErrorTimeout));
 			}
-			else if(this.#readings.length)
+			else if(this.#readingsFromFile.length)
 			{
-				if(logger)
-					logger.log(this, logger.WRITE_STREAM_QUEUED_DUE_TO_FILE_READING);
+				if(Logger)
+					Logger.log(this, Logger.WRITE_STREAM_QUEUED_DUE_TO_FILE_READING);
 
-				Promise.allSettled(this.#readings).then(()=>
+				Promise.allSettled(this.#readingsFromFile).then(()=>
 				{
 					if(this.#pendingWrite === resolve)
 					{
-						if(logger)
-							logger.log(this, logger.WRITE_STREAM_STARTED_FROM_QUEUE_AFTER_FILE_READ);
+						if(Logger)
+							Logger.log(this, Logger.WRITE_STREAM_STARTED_FROM_QUEUE_AFTER_FILE_READ);
 
 						resolve(this.#createWriteStreamAgent(maxStreamBufferSize, writeStreamErrorTimeout));
 					}
 				});
 			}
-			else if(this.#writing)
+			else if(this.#writingToFile)
 			{
-				if(logger)
-					logger.log(this, logger.WRITE_STREAM_QUEUED_DUE_TO_FILE_WRITING);
+				if(Logger)
+					Logger.log(this, Logger.WRITE_STREAM_QUEUED_DUE_TO_FILE_WRITING);
 
-				this.#writing.then(()=>
+				this.#writingToFile.then(()=>
 				{
-					if(this.#readings.length)
+					if(this.#readingsFromFile.length)
 					{
-						if(logger)
-							logger.log(this, logger.WRITE_STREAM_QUEUED_DUE_TO_FILE_READING);
+						if(Logger)
+							Logger.log(this, Logger.WRITE_STREAM_QUEUED_DUE_TO_FILE_READING);
 
-						Promise.allSettled(this.#readings).then(()=>
+						Promise.allSettled(this.#readingsFromFile).then(()=>
 						{
 							if(this.#pendingWrite === resolve)
 							{
-								if(logger)
-									logger.log(this, logger.WRITE_STREAM_STARTED_FROM_QUEUE_AFTER_FILE_READ);
+								if(Logger)
+									Logger.log(this, Logger.WRITE_STREAM_STARTED_FROM_QUEUE_AFTER_FILE_READ);
 
 								resolve(this.#createWriteStreamAgent(maxStreamBufferSize, writeStreamErrorTimeout));
 							}
@@ -986,8 +1572,8 @@ class TimeLimitManager
 					}
 					else if(this.#pendingWrite === resolve)
 					{
-						if(logger)
-							logger.log(this, logger.WRITE_STREAM_STARTED_FROM_QUEUE_AFTER_FILE_WRITE);
+						if(Logger)
+							Logger.log(this, Logger.WRITE_STREAM_STARTED_FROM_QUEUE_AFTER_FILE_WRITE);
 
 						resolve(this.#createWriteStreamAgent(maxStreamBufferSize, writeStreamErrorTimeout));
 					}
@@ -1005,10 +1591,10 @@ class TimeLimitManager
 	#createWriteStreamAgent(maxStreamBufferSize, writeStreamErrorTimeout)
 	{
 		this.#pendingWrite = null;
-		this.#data = null;
+		this.#memoryCache = null;
 
-		if(logger)
-			logger.log(this, logger.WRITE_STREAM_READY);
+		if(Logger)
+			Logger.log(this, Logger.WRITE_STREAM_READY);
 
 		const writeStream = fs.createWriteStream(this.filePath, {highWaterMark: maxStreamBufferSize});
 		const writeStreamAgent = new WriteStreamAgent(writeStream, this, writeStreamErrorTimeout);
@@ -1019,13 +1605,13 @@ class TimeLimitManager
 			{
 				this.#updateTimeLimit();
 				resolve();
-				if(this.#writing === writing) this.#writing = null;
+				if(this.#writingToFile === writing) this.#writingToFile = null;
 			}
 
 			writeStream.once("close", ()=>
 			{
-				if(logger)
-					logger.log(this, logger.WRITE_STREAM_CLOSED);
+				if(Logger)
+					Logger.log(this, Logger.WRITE_STREAM_CLOSED);
 
 				if(finalizeTimer)
 				{
@@ -1049,14 +1635,14 @@ class TimeLimitManager
 				if(!writeStreamAgent.waitForClose) finalize();
 				else finalizeTimer = setTimeout(finalize, writeStreamAgent.writeStreamErrorTimeout);
 
-				if(logger)
-					logger.log(this, logger.WRITE_STREAM_ERROR, error);
+				if(Logger)
+					Logger.log(this, Logger.WRITE_STREAM_ERROR, error);
 
 				writeStreamAgent.emit("error", error);
 				try { writeStream.close(); } catch (error) { }
 			});
 		});
-		this.#writing = writing;
+		this.#writingToFile = writing;
 		return writeStreamAgent;
 	}
 
@@ -1070,58 +1656,48 @@ class TimeLimitManager
 
 	/**
 	 *
-	 * @param {TimeLimitManager} target
+	 * @param {TimeLimitedEntity_} target
 	 */
 	#removeMemoryCache(target)
 	{
-		target.#data = null;
+		target.#memoryCache = null;
 		target.#memoryTimeLimit = null;
 
-		if(logger)
-			logger.log(target, logger.REMOVE_MEMORY_CACHE);
+		if(Logger)
+			Logger.log(target, Logger.REMOVE_MEMORY_CACHE);
 	}
 
 	/**
 	 *
-	 * @param {TimeLimitManager} target
+	 * @param {TimeLimitedEntity_} target
 	 */
 	#removeCacheFile(target)
 	{
 		target.#fileTimeLimit = null;
 
-		if(target.#readings.length || target.#writing)
+		if(target.#readingsFromFile.length || target.#writingToFile)
 		{
-			if(logger)
-				logger.log(target, logger.SKIP_REMOVE_FILE_DUE_TO_ACTIVE_READ_OR_WRITE);
+			if(Logger)
+				Logger.log(target, Logger.SKIP_REMOVE_FILE_DUE_TO_ACTIVE_READ_OR_WRITE);
 		}
 		else
 		{
-			if(logger)
-				logger.log(target, logger.REMOVE_START_CACHE_FILE);
+			if(Logger)
+				Logger.log(target, Logger.REMOVE_START_CACHE_FILE);
 			fs.rm(target.filePath, (error) =>
 			{
-				if(error && logger)
-					logger.log(target, logger.REMOVE_CACHE_FILE_FAILED, error);
-				else if(logger)
-					logger.log(target, logger.REMOVE_CACHE_FILE);
+				if(error && Logger)
+					Logger.log(target, Logger.REMOVE_CACHE_FILE_FAILED, error);
+				else if(Logger)
+					Logger.log(target, Logger.REMOVE_CACHE_FILE);
 			});
-
-			const entityKey = target.entityKey;
-			const paths = pathsFromEntityKey[entityKey];
-			paths.forEach(path =>
-			{
-				delete entityKeyFromPath[path];
-				paths.delete(path);
-			});
-
-			target.#onRemove(target);
 		}
 	}
 }
 
 class ReadStreamAgent extends EventEmitter
 {
-	/** @type {TimeLimitManager} */
+	/** @type {TimeLimitedEntity} */
 	#parent;
 
 	/** @type {Promise<ReadStreamAgent>} */
@@ -1142,7 +1718,7 @@ class ReadStreamAgent extends EventEmitter
 
 	/**
 	 *
-	 * @param {TimeLimitManager} manager
+	 * @param {TimeLimitedEntity} manager
 	 */
 	#releaseGlobalReadSlotOnce = (manager)=>
 	{
@@ -1165,7 +1741,7 @@ class ReadStreamAgent extends EventEmitter
 	/**
 	 *
 	 * @param {fs.ReadStream} readStream
-	 * @param {TimeLimitManager} parent
+	 * @param {TimeLimitedEntity} parent
 	 * @param {Promise<ReadStreamAgent>} promise
 	 * @param {ReadStreamAgentOptions} options
 	 */
@@ -1188,16 +1764,16 @@ class ReadStreamAgent extends EventEmitter
 		{
 			this.#data = true;
 
-			if(logger)
-				logger.log(this.#parent, logger.READ_STREAM_CHUNK_READ);
+			if(Logger)
+				Logger.log(this.#parent, Logger.READ_STREAM_CHUNK_READ);
 
 			self.emit("data", data);
 		}
 		const onEnd = ()=>
 		{
 			this.#end = true;
-			if(logger)
-				logger.log(this.#parent, logger.READ_STREAM_COMPLETE);
+			if(Logger)
+				Logger.log(this.#parent, Logger.READ_STREAM_COMPLETE);
 
 			if(self.#endOptions.removeDataEventListener)
 				self.removeAllListeners("data");
@@ -1214,8 +1790,8 @@ class ReadStreamAgent extends EventEmitter
 		}
 		const onClose = ()=>
 		{
-			if(logger)
-				logger.log(this.#parent, logger.READ_STREAM_CLOSED);
+			if(Logger)
+				Logger.log(this.#parent, Logger.READ_STREAM_CLOSED);
 
 			readStream.off("data", onReadStreamData);
 			readStream.off("end", onEnd);
@@ -1232,11 +1808,11 @@ class ReadStreamAgent extends EventEmitter
 		}
 		const onError = (error) =>
 		{
-			if(logger)
-				logger.errors[error.code] = error;
-
-			if(logger)
-				logger.log(this.#parent, logger.READ_STREAM_ERROR, error);
+			if(Logger)
+			{
+				Logger.errors[error.code] = error;
+				Logger.log(this.#parent, Logger.READ_STREAM_ERROR, error);
+			}
 
 			readStream.off("data", onReadStreamData);
 			readStream.off("end", onEnd);
@@ -1258,8 +1834,8 @@ class ReadStreamAgent extends EventEmitter
 		}
 		const onReady = ()=>
 		{
-			if(logger)
-				logger.log(this.#parent, logger.READ_STREAM_READY);
+			if(Logger)
+				Logger.log(this.#parent, Logger.READ_STREAM_READY);
 
 			this.#ready = true;
 		}
@@ -1294,7 +1870,7 @@ class WriteStreamAgent extends EventEmitter
 	/** @type {fs.WriteStream} */
 	#writeStream;
 
-	/** @type {TimeLimitManager} */
+	/** @type {TimeLimitedEntity} */
 	#parent;
 
 	/** @type {boolean} */
@@ -1306,7 +1882,7 @@ class WriteStreamAgent extends EventEmitter
 	/**
 	 *
 	 * @param {fs.WriteStream} writeStream
-	 * @param {TimeLimitManager} parent
+	 * @param {TimeLimitedEntity} parent
 	 * @param {number} writeStreamErrorTimeout
 	 */
 	constructor(writeStream, parent, writeStreamErrorTimeout)
@@ -1326,13 +1902,13 @@ class WriteStreamAgent extends EventEmitter
 	{
 		return new Promise((resolve, reject)=>
 		{
-			if(logger)
-				logger.log(this.#parent, logger.WRITE_STREAM_CHUNK_WRITE_BEGIN);
+			if(Logger)
+				Logger.log(this.#parent, Logger.WRITE_STREAM_CHUNK_WRITE_BEGIN);
 
 			const onError = error =>
 			{
-				if(logger)
-					logger.log(this.#parent, logger.WRITE_STREAM_CHUNK_WRITE_ERROR, error);
+				if(Logger)
+					Logger.log(this.#parent, Logger.WRITE_STREAM_CHUNK_WRITE_ERROR, error);
 
 				reject({error, agent:this});
 			}
@@ -1341,21 +1917,21 @@ class WriteStreamAgent extends EventEmitter
 
 			if(this.#writeStream.write(normalizeToBuffer(buffer)))
 			{
-				if(logger)
-					logger.log(this.#parent, logger.WRITE_STREAM_CHUNK_ACCEPTED);
+				if(Logger)
+					Logger.log(this.#parent, Logger.WRITE_STREAM_CHUNK_ACCEPTED);
 
 				this.#writeStream.off("error", onError);
 				resolve(this);
 			}
 			else
 			{
-				if(logger)
-					logger.log(this.#parent, logger.WRITE_STREAM_BUFFER_FULL);
+				if(Logger)
+					Logger.log(this.#parent, Logger.WRITE_STREAM_BUFFER_FULL);
 
 				this.#writeStream.once("drain", ()=>
 				{
-					if(logger)
-						logger.log(this.#parent, logger.WRITE_STREAM_DRAINED);
+					if(Logger)
+						Logger.log(this.#parent, Logger.WRITE_STREAM_DRAINED);
 
 					this.#writeStream.off("error", onError);
 					resolve(this);
@@ -1382,13 +1958,13 @@ class WriteStreamAgent extends EventEmitter
 
 			this.waitForClose = options.waitForClose;
 
-			if(logger)
-				logger.log(this.#parent, logger.WRITE_STREAM_FINISH_REQUESTED);
+			if(Logger)
+				Logger.log(this.#parent, Logger.WRITE_STREAM_FINISH_REQUESTED);
 
 			const onFinish = ()=>
 			{
-				if(logger)
-					logger.log(this.#parent, logger.WRITE_STREAM_ALL_DATA_COMPLETED);
+				if(Logger)
+					Logger.log(this.#parent, Logger.WRITE_STREAM_ALL_DATA_COMPLETED);
 
 				this.#writeStream.off("error", onFinishError);
 				this.#writeStream.once("close", onClose);
@@ -1407,16 +1983,16 @@ class WriteStreamAgent extends EventEmitter
 			}
 			const onFinishError = error=>
 			{
-				if(logger)
-					logger.log(this.#parent, logger.WRITE_STREAM_FINISH_ERROR, error);
+				if(Logger)
+					Logger.log(this.#parent, Logger.WRITE_STREAM_FINISH_ERROR, error);
 
 				this.#writeStream.off("finish", onFinish);
 				reject({error, agent:this});
 			}
 			const onCloseError = error =>
 			{
-				if(logger)
-					logger.log(this.#parent, logger.WRITE_STREAM_CLOSE_ERROR, error);
+				if(Logger)
+					Logger.log(this.#parent, Logger.WRITE_STREAM_CLOSE_ERROR, error);
 
 				this.#writeStream.off("close", onClose);
 				reject({error, agent:this});

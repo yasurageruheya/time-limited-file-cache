@@ -1,20 +1,37 @@
 /** @type {TextDecoder} */
 const decoder = new TextDecoder();
 
+/** @type {typeof TimeLimitedFileCache} */
+let TimeLimitedFileCache;
+
+/** @type {Object.<Logger>} */
+const loggers = {};
+
 const customPrepareStackTrace = (error, structuredStackTrace)=>
 {
 	const lastCallSite = structuredStackTrace[1];
 	return lastCallSite.getFileName() + " : " + lastCallSite.getLineNumber();
 }
 
-class Log
+class Logger
 {
+	static set TimeLimitedFileCache(value) { TimeLimitedFileCache = value; }
+
+	static getLogger(timeLimitedFile)
+	{
+		const fullPath = timeLimitedFile.fullPath;
+		if(typeof loggers[fullPath] === "undefined")
+			loggers[fullPath] = new Logger(timeLimitedFile);
+
+		return loggers[fullPath];
+	}
+
 	static getStack = ()=>
 	{
 		const original = Error.prepareStackTrace;
 		Error.prepareStackTrace = customPrepareStackTrace;
 		const obj = {};
-		Error.captureStackTrace(obj, Log.getStack);
+		Error.captureStackTrace(obj, Logger.getStack);
 		const message = obj.stack;
 		Error.prepareStackTrace = original;
 		return message;
@@ -23,16 +40,18 @@ class Log
 	/** @type {Object.<Error>} */
 	static errors = {};
 
+	static displayEntityKey = false;
+
 	/**
-	 *
-	 * @param {TimeLimitManager|{filePath:string}} manager
+	 * todo Logger インスタンスの out() に全部置き換えないといけない
+	 * @param {TimeLimitedEntity_|{filePath:string}} manager
 	 * @param {*} args
 	 */
 	static log(manager, ...args)
 	{
-		const message = manager.filePath + " : " + args.join(" ");
-		manager.parent.log.push(message);
-		const stack = Log.getStack();
+		const message = manager.filePath + "(" + manager.entityKey + ")" + " : " + args.join(" ");
+		TimeLimitedFileCache.log.push(message);
+		const stack = Logger.getStack();
 		manager.parent.stacks.push(stack);
 		console.log(stack + " " + message);
 	}
@@ -53,6 +72,12 @@ class Log
 
 	/** メモリキャッシュに値があったのでそれを Promise に渡します */
 	static READ_FROM_MEMORY_CACHE = "メモリキャッシュに値があったのでそれを Promise に渡します";
+
+	/** ファイル読み取り中にエラーが発生しました。 */
+	static READ_BUFFER_READ_ERROR = "ファイルの読み取り中にエラーが発生しました。";
+
+	/** ファイル読み取り後のクローズ処理中にエラーが発生しました。 */
+	static READ_BUFFER_CLOSE_ERROR = "ファイル読み取り後のクローズ処理中にエラーが発生しました。";
 
 	/** ファイル読み取りでエラーが発生しました。 */
 	static READ_BUFFER_ERROR = "ファイル読み取りでエラーが発生しました。";
@@ -212,6 +237,31 @@ class Log
 
 	/** currentGlobalReadings underflow */
 	static CURRENT_GLOBAL_READINGS_UNDERFLOW = "currentGlobalReadings underflow";
+
+	/** @type {TimeLimitedFile} */
+	file;
+
+	/** @type {string} */
+	message;
+
+	/** @type {Buffer} */
+	buffer;
+
+	out(message, buffer)
+	{
+		message = this.file.fullPath + " : " + message + (buffer ? " " + Logger.outputDataForLog(buffer) : "");
+		console.log(message);
+		TimeLimitedFileCache.log.push(message);
+		const stack = Logger.getStack();
+		TimeLimitedFileCache.stacks.push(stack);
+		console.log(stack + " " + message);
+		if(Logger.displayEntityKey) console.log(`${this.file.fullPath}(${this.file.entityKey})`);
+	}
+
+	constructor(file)
+	{
+		this.file = file;
+	}
 }
 
-module.exports = Log;
+module.exports = Logger;
