@@ -15,5 +15,8 @@
   "bugs": {
     "url": "https://github.com/yasurageruheya/time-limited-file-cache/issues"
   },
-  "homepage": "https://github.com/yasurageruheya/time-limited-file-cache#readme"
+  "homepage": "https://github.com/yasurageruheya/time-limited-file-cache#readme",
+  "devDependencies": {
+    "systeminformation": "^5.27.11"
+  }
 }

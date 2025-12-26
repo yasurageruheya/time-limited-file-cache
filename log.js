@@ -4,8 +4,8 @@ const decoder = new TextDecoder();
 /** @type {typeof TimeLimitedFileCache} */
 let TimeLimitedFileCache;
 
-/** @type {Object.<Logger>} */
-const loggers = {};
+/** @type {Map<FileSystemEntry, Logger>} */
+const loggers = new Map();
 
 const customPrepareStackTrace = (error, structuredStackTrace)=>
 {
@@ -17,14 +17,8 @@ class Logger
 {
 	static set TimeLimitedFileCache(value) { TimeLimitedFileCache = value; }
 
-	static getLogger(timeLimitedFile)
-	{
-		const fullPath = timeLimitedFile.fullPath;
-		if(typeof loggers[fullPath] === "undefined")
-			loggers[fullPath] = new Logger(timeLimitedFile);
-
-		return loggers[fullPath];
-	}
+	/** @type {Map<FileSystemEntry, Logger>} */
+	static loggers = new Map();
 
 	static getStack = ()=>
 	{
@@ -81,6 +75,9 @@ class Logger
 
 	/** ファイル読み取りでエラーが発生しました。 */
 	static READ_BUFFER_ERROR = "ファイル読み取りでエラーが発生しました。";
+
+	/** 読み取り中にメモリキャッシュの変更を伴う書き込みが発生したため、読み取りを中断し、読み取りはメモリキャッシュを返します */
+	static READ_BUFFER_ABORTED = "読み取り中にメモリキャッシュの更新を伴う書き込みが発生したため、読み取りを中断し、読み取りはメモリキャッシュを返します";
 
 	/** メモリキャッシュに値が無かったため、ファイルシステムから読み取りを開始します */
 	static READ_START_FROM_FILE_SYSTEM = "メモリキャッシュに値が無かったため、ファイルシステムから読み取りを開始します";
@@ -150,6 +147,9 @@ class Logger
 
 	/** ファイル書き込みでエラーが発生しました。 */
 	static WRITE_BUFFER_ERROR = "ファイル書き込みでエラーが発生しました。";
+
+	/** 新しい書き込みが発生したため、現在の書き込みを中断します */
+	static WRITE_BUFFER_ABORT = "新しい書き込みが発生したため、現在の書き込みを中断します";
 
 	/** ファイルへの書き込みが終わったので、新しいデータをファイルへ書き込み開始します */
 	static WRITE_START_FROM_QUEUE_AFTER_WRITE = "ファイルへの書き込みが終わったので、新しいデータをファイルへ書き込み開始します";
@@ -238,8 +238,8 @@ class Logger
 	/** currentGlobalReadings underflow */
 	static CURRENT_GLOBAL_READINGS_UNDERFLOW = "currentGlobalReadings underflow";
 
-	/** @type {TimeLimitedFile} */
-	file;
+	/** @type {FileSystemEntry} */
+	entry;
 
 	/** @type {string} */
 	message;
@@ -249,18 +249,19 @@ class Logger
 
 	out(message, buffer)
 	{
-		message = this.file.fullPath + " : " + message + (buffer ? " " + Logger.outputDataForLog(buffer) : "");
+		message = this.entry.fullPath + " : " + message + (buffer ? " " + Logger.outputDataForLog(buffer) : "");
 		console.log(message);
 		TimeLimitedFileCache.log.push(message);
 		const stack = Logger.getStack();
 		TimeLimitedFileCache.stacks.push(stack);
 		console.log(stack + " " + message);
-		if(Logger.displayEntityKey) console.log(`${this.file.fullPath}(${this.file.entityKey})`);
+		if(Logger.displayEntityKey) console.log(`${this.entry.fullPath}(${this.entry.entityKey})`);
 	}
 
-	constructor(file)
+	constructor(entry)
 	{
-		this.file = file;
+		this.entry = entry;
+		Logger.loggers.set(entry, this);
 	}
 }
 
