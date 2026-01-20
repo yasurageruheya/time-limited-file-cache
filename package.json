@@ -17,6 +17,7 @@
   },
   "homepage": "https://github.com/yasurageruheya/time-limited-file-cache#readme",
   "devDependencies": {
+    "nexus-array-buffer-pool": "^0.0.1",
     "systeminformation": "^5.27.11"
   }
 }

@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+	"target": "es2024",
+	"module": "commonjs",
+	"lib": [
+	  "es2024"
+	],
+	"allowJs": true, // JavaScript ファイルを許可
+//	"checkJs": true,  // JavaScript ファイルの型チェックを有効化（推奨）
+//	"noEmit": true    // 実際にはTypeScriptのファイルを生成しない
+  },
+  "include": [
+	"./**/*.js" // プロジェクト内のすべてのJSファイルを含める
+  ],
+  "exclude": [
+	"node_modules"
+  ],
+  "sourceMap": true
+}
