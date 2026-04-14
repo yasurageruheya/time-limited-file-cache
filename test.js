@@ -1,4 +1,4 @@
-const TimeLimitedFileCache = require('./index');
+const TimeLimitedFileCache = require('./index.bak.js');
 const path = require("node:path");
 /** @type {typeof Logger} */
 const logger = require("./log");
