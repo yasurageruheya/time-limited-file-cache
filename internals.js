@@ -433,31 +433,28 @@ export class PhysicalDrive
 {
 	maxConcurrency = 2;
 
-	jobs = [];
+	running = 0;
 
-	assign(start, end)
+	queues = [];
+
+	async assign(taskFn)
 	{
-		if(this.jobs.length >= this.maxConcurrency)
-		{
-			
+		if(this.running.length >= this.maxConcurrency)
+			await new Promise(resolve => this.queues.push(resolve));
+
+		this.running++;
+		try {
+			return await taskFn();
+		} catch (error) {
+			throw error;
+		} finally {
+			this.running--;
+			if(this.queues.length > 0)
+				this.queues.shift()();
 		}
 	}
 
 	constructor() {
 
-	}
-}
-
-export class Job
-{
-	/** @type {()=>any} */
-	start;
-
-	/** @type {()=>void} */
-	end;
-
-	constructor(start, end) {
-		this.start = start;
-		this.end = end;
 	}
 }
