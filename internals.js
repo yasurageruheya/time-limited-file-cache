@@ -420,7 +420,7 @@ export class LogicalVolume
 		return logicalVolumes.get(deviceId);
 	}
 
-	physicalDrive = new PhysicalDrive();
+	physicalDrive;
 
 	deviceId;
 
@@ -431,11 +431,27 @@ export class LogicalVolume
 
 export class PhysicalDrive
 {
+	/** @type {Map<string, PhysicalDrive>} */
+	static devices = new Map();
+
+	static fromId(deviceId)
+	{
+		if(!PhysicalDrive.devices.has(deviceId))
+			PhysicalDrive.devices.set(deviceId, new PhysicalDrive(deviceId));
+
+		return PhysicalDrive.devices.get(deviceId);
+	}
+
 	maxConcurrency = 2;
+
+	//todo: openFileHandlesLimit 付ける？？？
 
 	running = 0;
 
 	queues = [];
+
+	/** @type {import('systeminformation').Systeminformation.BlockDevicesData} */
+	blockDeviceData = null;
 
 	async assign(taskFn)
 	{
@@ -454,7 +470,29 @@ export class PhysicalDrive
 		}
 	}
 
-	constructor() {
+	/** @type {string} */
+	#id;
+	/** @return {string} */
+	get id() { return this.#id; }
+	/** @param {string} newId */
+	set id(newId)
+	{
+		this.#checkId(newId);
+		PhysicalDrive.devices.delete(this.#id);
 
+		PhysicalDrive.devices.set(newId, this);
+		this.#id = newId;
+	}
+
+	#checkId(id)
+	{
+		if(PhysicalDrive.devices.has(id))
+			throw new Error("既に同一 id の PhysicalDrive インスタンスが存在しています。指定された id:" + id);
+	}
+
+	constructor(id) {
+		this.#checkId(id);
+		this.#id = id;
+		PhysicalDrive.devices.set(id, this);
 	}
 }
