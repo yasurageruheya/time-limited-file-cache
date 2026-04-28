@@ -7,7 +7,7 @@ import TimeLimitedFileCache from "./index.js";
 export let Logger;
 
 /** @type {Set<FileEntity>} */
-export const fileHandleOpeningEntities = new Set();
+export const globalOpenedEntities = new Set();
 
 export const bigIntStatsOptions = {bigint: true};
 
@@ -46,16 +46,16 @@ export const FILE_HANDLE_CLOSE_REASON = Object.freeze({
 
 export const globalFileHandleSlot = async() =>
 {
-	if(TimeLimitedFileCache.maxFileHandleCache < fileHandleOpeningEntities.size)
+	if(TimeLimitedFileCache.maxFileHandleCache < globalOpenedEntities.size)
 	{
-		const openings = fileHandleOpeningEntities.values();
+		const openings = globalOpenedEntities.values();
 		const first = openings.next().value;
 		let opened = first;
 		while (opened)
 		{
 			if(!opened.reading)
 			{
-				fileHandleOpeningEntities.delete(opened);
+				globalOpenedEntities.delete(opened);
 				await opened.closeFileHandle();
 				return null;
 			}
@@ -65,7 +65,7 @@ export const globalFileHandleSlot = async() =>
 		//todo: globalFileHandleSlot() が2回同時に呼ばれた場合、2回とも同じ entity の busy の完了を待つ事になってしまう
 		//todo: Geminiの話しを読む！！！
 		await first.reading;
-		fileHandleOpeningEntities.delete(first);
+		globalOpenedEntities.delete(first);
 		await first.closeFileHandle();
 		return null;
 	}
@@ -226,8 +226,11 @@ export class FileEntity
 	/** @type {Promise<FileHandle>} */
 	#fileHandlePromise;
 
-	/** @type {boolean} todo:このフラグ要る？？？ */
-	#fileHandleOpened;
+	/** @type {Promise<FileHandle>} */
+	opening;
+
+	/** @return {boolean} */
+	get opened() { return self.globalOpenedEntities.has(this); }
 
 	/** @type {Buffer} */
 	#memoryCache;
@@ -243,6 +246,11 @@ export class FileEntity
 
 	/** @type {boolean} */
 	closingReserved = false;
+
+
+	get busy() {
+		return this.opening || this.reading || this.writing || this.closing;
+	}
 
 
 	/**
@@ -262,26 +270,30 @@ export class FileEntity
 	}
 
 	/** @type {null|Promise<void>} */
-	#closeFileHandlePromise;
+	closing;
 
 	/** @return {Promise<void>} */
 	closeFileHandle()
 	{
-		if(!this.#closeFileHandlePromise)
+		if(!this.#fileHandlePromise) throw new Error("オープンされていないファイルに対してクローズ命令が出されました");
+
+		if(!this.closing)
 		{
-			this.#closeFileHandlePromise = (async()=> {
+			this.closing = (async()=> {
 				try {
 					const fh = await this.#fileHandlePromise;
 					return fh.close();
 				} catch (error) {
 					throw error;
 				} finally {
+					self.globalOpenedEntities.delete(this);
+					this.logicalVolume.physicalDrive.openedEntities.delete(this);
 					this.#fileHandlePromise = null;
-					this.#closeFileHandlePromise = null;
+					this.closing = null;
 				}
 			})();
 		}
-		return this.#closeFileHandlePromise;
+		return this.closing;
 	}
 
 	openFileHandle = ()=>
@@ -292,24 +304,26 @@ export class FileEntity
 			{
 				try {
 					const fileHandle = await fsp.open(this.fullPath, "r+");
-					fileHandleOpeningEntities.add(this);
-					this.#fileHandleOpened = true;
+					globalOpenedEntities.add(this);
+					this.logicalVolume.physicalDrive.openedEntities.add(this);
 					return fileHandle;
 				} catch (error) {
 					if(error.code === "ENOENT") {
 						try {
 							const fileHandle = await fsp.open(this.fullPath, "w+");
-							fileHandleOpeningEntities.add(this);
-							this.#fileHandleOpened = true;
+							globalOpenedEntities.add(this);
+							this.logicalVolume.physicalDrive.openedEntities.add(this);
 							return fileHandle;
 						} catch (error) {
-							this.#fileHandleOpened = false;
 							throw error;
 						}
 					}
 					else throw error;
+				} finally {
+					this.opening = null;
 				}
 			})();
+			this.opening = this.#fileHandlePromise;
 		}
 
 		return this.#fileHandlePromise;
@@ -444,7 +458,28 @@ export class PhysicalDrive
 
 	maxConcurrency = 2;
 
-	//todo: openFileHandlesLimit 付ける？？？
+	#openFileHandlesLimit;
+
+	get openFileHandlesLimit() { return this.#openFileHandlesLimit; }
+	set openFileHandlesLimit(value) {
+		if(value > TimeLimitedFileCache.maxFileHandleCache) {
+			const message = "PhysicalDrive インスタンスの openFileHandlesLimit プロパティに設定出来る数値は " +
+				`TimeLimitedFileCache.maxFileHandleCache に設定されている数値（${TimeLimitedFileCache.maxFileHandleCache}）以下でなければいけません。`+
+				"\n同時にオープン出来るファイルハンドルの数を増やしたい場合は、OS の FD（File Descriptor）制限数や同時起動するアプリを考慮した上で "+
+				"TimeLimitedFileCache.maxFileHandleCache の値を増やし、ターゲットの物理ドライブ（PhysicalDrive インスタンス）の openFileHandlesLimit プロパティを書き換えてください";
+			throw new Error(message);
+		}
+
+		if(value < this.openedEntities.size) {
+			//todo: オープン済みファイルハンドルを閉じていかなきゃ
+			//todo: 多分ここから！！！！！
+		}
+
+		this.#openFileHandlesLimit = value;
+	}
+
+	/** @type {Set<FileEntity>} */
+	openedEntities = new Set();
 
 	running = 0;
 

@@ -44,30 +44,25 @@ class TimeLimitedFileCache
 					});
 
 
-					const blockDevicesPromise = systemInformation.blockDevices().then(blockDevices =>
-					{
+					const blockDevicesPromise = systemInformation.blockDevices().then(blockDevices => {
 						const promises = [];
-						for(let i = blockDevices.length; i--;)
+						for (let i = blockDevices.length; i--;)
 						{
 							const bd = blockDevices[i];
 							/** @type {LogicalVolume} */
 							let vol;
-							promises.push(fs.promises.stat(bd.mount, bigIntStatsOptions).then(stats =>
-							{
+							promises.push(fs.promises.stat(bd.mount, bigIntStatsOptions).then(stats => {
 								vol = LogicalVolume.getFromStatsDeviceID(stats.dev);
 								vol.stats = stats;
 								vol.setBlockDeviceData(bd, bd.mount);
 								return diskLayoutPromise;
-							}).then(()=>
-							{
-								if(autoMapping)
-								{
-									if(bd.device) vol.hostDevice = StorageDevice.getFromId(bd.device);
+							}).then(() => {
+								if (autoMapping) {
+									if (bd.device) vol.hostDevice = StorageDevice.getFromId(bd.device);
 									else vol.hostDevice = StorageDevice.getFromId(`unknown ${unknowDeviceCount++}`);
 								}
 
-								if(autoMapping && useOptimalProfile)
-								{
+								if (autoMapping && useOptimalProfile) {
 									const sd = vol.hostDevice;
 									const statsBlockSize = Number(vol.stats.blksize);
 									const ioProfile = vol.ioProfile;
@@ -75,10 +70,8 @@ class TimeLimitedFileCache
 									let minChunkSize = ioProfile.minChunkSize;
 									const type = sd.type.toLowerCase();
 									const interfaceType = sd.interfaceType.toLowerCase();
-									if(type === "ssd" || type === "nvme" || type === "virtual" || type === "tmpfs" || type === "lvm")
-									{
-										switch (interfaceType)
-										{
+									if (type === "ssd" || type === "nvme" || type === "virtual" || type === "tmpfs" || type === "lvm") {
+										switch (interfaceType) {
 											case "fc":
 											case "fibre channel":
 												maxConcurrentReads = cpuLength > 32 ? 32 : cpuLength;
@@ -107,11 +100,8 @@ class TimeLimitedFileCache
 												maxConcurrentReads = cpuLength > 4 ? 4 : cpuLength;
 												minChunkSize = 64 * 1024;
 										}
-									}
-									else if(type === "network")
-									{
-										switch(interfaceType)
-										{
+									} else if (type === "network") {
+										switch (interfaceType) {
 											case "infiniband":
 												maxConcurrentReads = cpuLength > 32 ? 32 : cpuLength;
 												minChunkSize = 256 * 1024;
@@ -133,11 +123,8 @@ class TimeLimitedFileCache
 												maxConcurrentReads = cpuLength > 8 ? 8 : cpuLength;
 												minChunkSize = 512 * 1024;
 										}
-									}
-									else if(type === "advanced" || type === "mpath" || type === "multipath")
-									{
-										switch(interfaceType)
-										{
+									} else if (type === "advanced" || type === "mpath" || type === "multipath") {
+										switch (interfaceType) {
 											case "fc":
 											case "fibre channel":
 												maxConcurrentReads = cpuLength > 32 ? 32 : cpuLength;
@@ -154,11 +141,8 @@ class TimeLimitedFileCache
 												maxConcurrentReads = cpuLength > 8 ? 8 : cpuLength;
 												minChunkSize = 128 * 1024;
 										}
-									}
-									else if(type === "hd" || type === "hdd" || type === "sas" || type === "scsi")
-									{
-										switch(interfaceType)
-										{
+									} else if (type === "hd" || type === "hdd" || type === "sas" || type === "scsi") {
+										switch (interfaceType) {
 											case "fc":
 											case "fibre channel":
 											case "sas":
@@ -183,12 +167,9 @@ class TimeLimitedFileCache
 												minChunkSize = getOptimalChunkSize(128 * 1024, sd);
 												break;
 										}
-									}
-									else if(type === "tape")
-									{
+									} else if (type === "tape") {
 										maxConcurrentReads = 1;
-										switch(interfaceType)
-										{
+										switch (interfaceType) {
 											case "sas":
 											case "fc":
 											case "fibre channel":
@@ -199,12 +180,9 @@ class TimeLimitedFileCache
 												minChunkSize = getOptimalChunkSize(1024 * 1024, sd);
 												break;
 										}
-									}
-									else if(type === "cd-rom" || type === "dvd-rom" || type === "bd-rom")
-									{
+									} else if (type === "cd-rom" || type === "dvd-rom" || type === "bd-rom") {
 										maxConcurrentReads = 1;
-										switch(interfaceType)
-										{
+										switch (interfaceType) {
 											case "sata":
 											case "ide":
 											case "atapi":
@@ -215,34 +193,22 @@ class TimeLimitedFileCache
 												minChunkSize = 512 * 1024;
 												break;
 										}
-									}
-									else if(type === "floppy")
-									{
+									} else if (type === "floppy") {
 										maxConcurrentReads = 1;
 										minChunkSize = getOptimalChunkSize(128 * 1024, sd);
-									}
-									else if(type === "fuse" || type === "crypto" || type === "vboxsf" || type === "vmhgfs")
-									{
+									} else if (type === "fuse" || type === "crypto" || type === "vboxsf" || type === "vmhgfs") {
 										maxConcurrentReads = cpuLength > 4 ? 4 : cpuLength;
 										minChunkSize = 256 * 1024;
-									}
-									else if(type === "virtio")
-									{
+									} else if (type === "virtio") {
 										maxConcurrentReads = cpuLength > 32 ? 32 : cpuLength;
 										minChunkSize = 64 * 1024;
-									}
-									else if(type === "zfs" || type === "md" || type === "btrfs")
-									{
+									} else if (type === "zfs" || type === "md" || type === "btrfs") {
 										maxConcurrentReads = cpuLength > 16 ? 16 : cpuLength;
 										minChunkSize = 64 * 1024;
-									}
-									else if(type === "loop")
-									{
+									} else if (type === "loop") {
 										maxConcurrentReads = cpuLength > 4 ? 4 : cpuLength;
 										minChunkSize = 64 * 1024;
-									}
-									else if(type === "pipe" || type === "serial")
-									{
+									} else if (type === "pipe" || type === "serial") {
 										maxConcurrentReads = 1;
 										minChunkSize = 128 * 1024;
 									}
@@ -252,14 +218,16 @@ class TimeLimitedFileCache
 									ioProfile.minChunkSize = minChunkSize;
 								}
 								return Promise.resolve();
-							}).catch(()=>Promise.resolve()));
-						}
+							}).catch(() => Promise.resolve()));
 
-						return Promise.all(promises).then(()=>
-						{
-							this.#autoDetectDevicesPromise = null;
-							resolve();
-						});
+							return Promise.all(promises).then(()=>
+							{
+								this.#autoDetectDevicesPromise = null;
+								resolve();
+							});
+						}
+					});
+
 				} catch (error) {
 					throw error;
 				} finally {
